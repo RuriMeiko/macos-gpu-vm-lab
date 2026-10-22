@@ -53,3 +53,19 @@ Also noted:
   downloads online via recovery network.
 
 Current state at save time: VM still running with recovery UI up.
+
+## M1 continued: install started (2026-10-22 ~13:20 +07)
+
+- Re-added the target disk. AHCI ports >3 invisible to macOS (tried sata.4/.5/.0 — Disk Utility
+  never listed the disk); **moving it to NVMe worked**: `-device nvme,drive=MacHDD,serial=MACDISK1`.
+- Disk Utility (via VNC automation) erased the 85.9GB NVMe to APFS/GUID ("Untitled", container disk3).
+- Note: HMP mouse_move/mouse_button do NOT work for the macOS GUI (only OpenCore picker); keyboard
+  sendkey works in firmware only. Control of the GUI is via VNC: QEMU `-display none -vnc 127.0.0.1:5`
+  + vncdotool (installed into ~/.hermes/venvs/cybersec). vncdo key names: `return` not `ret`,
+  `super` = Cmd. OpenCore picker: `keydown right/keyup right` then `return`.
+- Install flow automated so far: Utilities > Reinstall macOS Tahoe > Continue > Agree x2 >
+  select "Untitled" (85.69GB) > Continue. Installer is now copying (progress bar running).
+- 3h20m remaining is the initial estimate (emulated NVMe is slow); expect it to drop.
+
+Next: wait for install completion, VM auto-reboots into macOS, remove BaseSystem/OpenCore boot
+ordering (OpenCore will boot the new "Macintosh HD" or select via picker), then M2 (virtio-gpu kext).
