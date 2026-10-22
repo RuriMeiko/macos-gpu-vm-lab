@@ -668,10 +668,12 @@ static bool setDisplayEDIDProps(IOService * fb) {
     return true;
 }
 
-static void timerFlushThunk(OSObject * owner, IOTimerEventSource * /*sender*/) {
+static void timerFlushThunk(OSObject * owner, IOTimerEventSource * sender) {
     VirtIOGPUDisplay * self = (VirtIOGPUDisplay *) owner;
+    sender->setTimeoutMS(66);
+    sender->enable();
+    IOLog("VGDISP: timer tick\n");
     self->flushWholeFb();
-    self->edidTick();
 }
 
 IOReturn VirtIOGPUDisplay::enableController(void) {
