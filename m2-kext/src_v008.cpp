@@ -473,7 +473,14 @@ void VirtIOGPUDisplay::agdcRetryTickThunk(OSObject * owner, IOTimerEventSource *
 
 void VirtIOGPUDisplay::agdcRetryTick(IOTimerEventSource * timer) {
     if (agdcNubCreated) return;
-    IOService * agdcNub = (IOService *)OSMetaClass::allocClassWithName("AppleGraphicsDeviceControl");
+    IOService * agdcNub = (IOService *)OSMetaClass::allocClassWithName("AppleGraphicsDeviceControlPlugin");
+    if (!agdcNub) {
+        agdcNub = (IOService *)OSMetaClass::allocClassWithName("AppleGraphicsDeviceControl");
+    }
+    if (!agdcNub) {
+        agdcNub = new IOService;
+        IOLog("VGDISP: AGDC classes unavailable, using plain nub\n");
+    }
     if (agdcNub) {
         if (agdcNub->init()) {
             if (agdcNub->attach(pci)) {
