@@ -84,3 +84,9 @@
   'IONDRVFramebuffer' class or IOFB attributes like kIOFBVendorKey / 'NDrv' presence).
 - Consider writing a minimal NDRV shim: IOFramebuffer subclass exposing getInterfaceTable for
   IOFramebufferInstanceData / 'nub' with kIONDRVModuleKey.
+
+## v0.0.31–v0.0.34 (IOAccelerator nub chain)
+- v0.0.31–33: IOService nub "IOAccelerator" attach fb/pci + props (IOAccelIndex/Revision/Types) — GPUWrangler `accel 0x000000000` vẫn 0 → lookup là CLASS-based, plain IOService nubs bị bỏ qua.
+- v0.0.34 BREAKTHROUGH: OSMetaClass::allocClassWithName("IOAccelerator") — instantiate class thật từ IOAcceleratorFamily2 (no header needed!) + attach PCI + registerService → GPUWrangler log `accel 0x1000002f7 /IOAccelerator` ✓✓. "Unable to find display pipe for IOFB service" GONE. IOAccelerationUserClient được mở (instance 1 — WindowServer).
+- Chain giờ: wrangler sees accel ✓, FB created ✓, display-pipe error gone ✓. Remaining: (IOPresentment) "plist invalid for pluginType / no factories for plugin" → "Unable to get AGDC information 0x10000003 (kIOReturnNoResources)" → "Unable to locate service dependencies" → "Unable to acquire map". AGDC plugin = AppleGraphicsDeviceControlPlugin (id 0x1000002f6) nằm CON của AppleGPUWrangler (chung tree), nhưng wrangler `agdc 0x000000000` per-GPU vẫn 0 — cần AppleGraphicsDeviceControl gắn trên GPU device (như IOGraphicsDevice nub) — next: tạo IOGraphicsDevice nub con PCI để AGDC plugin attach.
+- Commit 9033a51 (v0.0.31–33 notes inline).
