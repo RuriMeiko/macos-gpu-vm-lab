@@ -506,6 +506,11 @@ bool VirtIOGPUDisplay::start(IOService * provider) {
 
     displayModeId = 0; /* CoreDisplay asks mode 0x0 via IOFBSetDisplayModeAndDepth */
     setDisplayMode(displayModeId, 0);
+    /* CoreDisplay classifies the driver by probing these string keys on
+       the IOFB registry entry ("Can't get value for key ...").  Claim the
+       paravirt identity so CoreDisplay picks the paravirt framebuffer path
+       instead of falling through to a virtual/offline framebuffer. */
+    setProperty("AppleParavirtFramebuffer", "true");
     registerService();
     IOLog("VGDISP: === v0.0.8 IOFramebuffer %ux%u started ===\n", displayW, displayH);
     return true;
