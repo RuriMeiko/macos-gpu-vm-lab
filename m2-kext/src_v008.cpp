@@ -504,7 +504,7 @@ bool VirtIOGPUDisplay::start(IOService * provider) {
     if (!initControlQueue()) { IOLog("VGDISP: queue init failed\n"); return false; }
     if (!setupDisplayPipeline()) { IOLog("VGDISP: pipeline failed\n"); return false; }
 
-    displayModeId = 1;
+    displayModeId = 0; /* CoreDisplay asks mode 0x0 via IOFBSetDisplayModeAndDepth */
     setDisplayMode(displayModeId, 0);
     registerService();
     IOLog("VGDISP: === v0.0.8 IOFramebuffer %ux%u started ===\n", displayW, displayH);
