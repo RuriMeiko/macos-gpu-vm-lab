@@ -1,0 +1,13 @@
+#cloud-config
+hostname: venus-m0
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: lab   # throwaway lab VM only, NAT-only
+ssh_pwauth: true
+package_update: true
+packages: [mesa-vulkan-drivers, vulkan-tools, mesa-utils]
+runcmd:
+  - [ sh, -c, "vulkaninfo --summary > /home/lab/vulkan.txt 2>&1; echo done > /home/lab/m0.done" ]

@@ -23,7 +23,7 @@ Pieces we must write (nothing exists for macOS guests):
 
 ## Milestones (each independently verifiable)
 
-- M0 Host: QEMU >= 9.2 with `virtio-gpu-gl,venus=on,blob=on,hostmem=...` running a *Linux* guest with Vulkan (vkcube). Proves the host side on this machine.
+- [x] M0 Host (done, see docs/M0-RESULT.md): QEMU >= 9.2 with `virtio-gpu-gl,venus=on,blob=on,hostmem=...` running a *Linux* guest with Vulkan (vkcube). Proves the host side on this machine.
 - M1 macOS guest boots under OpenCore on Ryzen/KVM with basic display (no acceleration).
 - M2 Guest kext enumerates virtio-gpu, reads features, negotiates VIRTIO_GPU_F_VENUS/blob.
 - M3 Framebuffer via virtio-gpu scanout (resolution changes, no 3D).
