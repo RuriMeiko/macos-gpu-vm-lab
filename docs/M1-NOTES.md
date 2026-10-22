@@ -85,3 +85,24 @@ ordering (OpenCore will boot the new "Macintosh HD" or select via picker), then 
 - Login screen: click khong hien password field; nhấn key down (hoặc click vao lock) moi hien.
 - Keyboard Setup Assistant hien "QEMU device cannot be identified" -> Quit.
 - M1 DONE. Next: M2 (kext IOKit enumerate virtio-gpu PCI).
+
+## M3: virtio-gpu framebuffer pipeline (v0.0.6 → v0.0.7) — DONE
+- v0.0.6: desc0 flags cần VRING_DESC_F_NEXT(0x1) để chain — fix "response size incorrect".
+- v0.0.7: full fb pipeline chạy sạch trên guest: handshake → GET_DISPLAY_INFO (resp 0x1101, 
+  display[0] 1280x800) → CREATE_2D(res,fmt B8G8R8A8,1280x800) → ATTACH_BACKING(fb 4096000B) →
+  SET_SCANOUT(0) → TRANSFER_TO_HOST_2D → RESOURCE_FLUSH. resp_type=0x1100 ×5, dmesg VGDRV chain.
+- QEMU traces xác nhận: virtio_gpu_cmd_res_create_2d/set_scanout/res_flush res 0x1 1280x800.
+- Học được:
+  * Driver-side availNext counter (không đọc *aIdx stale).
+  * Kext reload cần kextunload TRƯỚC kextload; approval P&S dùng cliclick recipe (scroll =
+    drag scrollbar 990,430→990,690; Allow ~940,511; password dialog + Modify Settings).
+  * OC picker khi virtio-gpu là display duy nhất: phím Enter = HMP sendkey kp_enter (ret/vncdo
+    key ret KHÔNG ăn); right ×2 từ EFI để chọn Untitled.
+  * QEMU đa GPU: VNC render từ head0 (vmware-svga trước); sau khi bỏ vmware-svga, virtio-gpu
+    là display duy nhất — VNC + screendump render từ nó.
+  * OVMF GOP tạo res 0x2 (fmt X8R8G8B8) — guest Apple display stack flush partial rects
+    (848x19 v.v.) lên scanout — đó là desktop render.
+- Commit: 11088bb (v0.0.7). Backup disk: mac_hdd.qcow2.bak-m3fb.
+- Boot script mới: boot-tahoe-vgpu.sh (không vmware-svga). QEMU phải chạy bằng terminal
+  background của agent (nohup trong execute_code bị kill khi cell kết thúc).
+- Next: M4 Venus (3D) — hoặc M5 Metal device probe.
