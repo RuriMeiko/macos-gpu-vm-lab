@@ -12,13 +12,14 @@
     <key>com.apple.kpi.libkern</key><string>15.5</string>
     <key>com.apple.kpi.mach</key><string>15.5</string>
     <key>com.apple.iokit.IOPCIFamily</key><string>2.9</string>
+    <key>com.apple.iokit.IOGraphicsFamily</key><string>3.0</string>
   </dict>
   <key>IOKitPersonalities</key>
   <dict>
-    <key>VirtIOGPUProbeDirect</key>
+    <key>VirtIOGPUDisplayDirect</key>
     <dict>
       <key>CFBundleIdentifier</key><string>com.mylab.VirtIOGPUProbe</string>
-      <key>IOClass</key><string>VirtIOGPUProbe</string>
+      <key>IOClass</key><string>VirtIOGPUDisplay</string>
       <key>IOProviderClass</key><string>IOPCIDevice</string>
       <key>IOPCIPrimaryMatch</key><string>0x10501af4&amp;0xffffffff</string>
       <key>IOProbeScore</key><string>20000</string>
