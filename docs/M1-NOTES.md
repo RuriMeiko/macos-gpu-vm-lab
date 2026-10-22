@@ -69,3 +69,19 @@ Current state at save time: VM still running with recovery UI up.
 
 Next: wait for install completion, VM auto-reboots into macOS, remove BaseSystem/OpenCore boot
 ordering (OpenCore will boot the new "Macintosh HD" or select via picker), then M2 (virtio-gpu kext).
+
+## M1 COMPLETE (2026-10-22 ~15:42 +07): macOS Tahoe booted to desktop, logged in
+
+- Installer copy: phase 1 ~75-90% (progress bar, est co tu 3h20 -> 1h27), roi sang phase 2
+  (logo Apple + progress trang, ~23p). Tu reboot sau khi xong.
+- Sau reboot: boot vao he moi, xnu-12377.161.15.700.19~2 (khac recovery build).
+- Setup Assistant van chay: Region=Vietnam, keyboard default, Setup as new,
+  Time Zone doi qua Ho Chi Minh City (dropdown la editable text field — go "Ho Chi Minh City"
+  de type-ahead; khong mo bang click), Location Services bo, Analytics bo tick,
+  Screen Time skip, FileVault Not Now, look Dark, updates = auto download only.
+- tai khoan: user "long" / mat khau vm123456 (GHI NHO).
+- Step "Update Mac Automatically" khet ~5p (spinner quay, click/enter khong an) ->
+  FIX = reboot VM. Sau reboot: login screen -> login OK -> desktop.
+- Login screen: click khong hien password field; nhấn key down (hoặc click vao lock) moi hien.
+- Keyboard Setup Assistant hien "QEMU device cannot be identified" -> Quit.
+- M1 DONE. Next: M2 (kext IOKit enumerate virtio-gpu PCI).
