@@ -137,6 +137,7 @@ public:
     virtual IOReturn connectFlags(IOIndex connectIndex, IODisplayModeID displayMode, IOOptionBits * flags) override;
     virtual IOItemCount getConnectionCount(void) override;
     virtual IOReturn enableController(void) override;
+    virtual IODeviceMemory * getVRAMRange(void) override;
     virtual bool hasDDCConnect(IOIndex connectIndex) override;
     virtual IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
         IOSelect blockType, IOOptionBits options, UInt8 * data, IOByteCount * length) override;
@@ -689,6 +690,10 @@ IOReturn VirtIOGPUDisplay::enableController(void) {
     }
     setDisplayEDIDProps(this);
     return kIOReturnSuccess;
+}
+
+IODeviceMemory * VirtIOGPUDisplay::getVRAMRange(void) {
+    return getApertureRange(kIOFBSystemAperture);
 }
 
 bool VirtIOGPUDisplay::hasDDCConnect(IOIndex connectIndex) {
