@@ -700,7 +700,15 @@ IOReturn VirtIOGPUDisplay::enableController(void) {
 }
 
 IODeviceMemory * VirtIOGPUDisplay::getVRAMRange(void) {
-    return getApertureRange(kIOFBSystemAperture);
+    /* WindowServer/IOPresentment maps the VRAM aperture from userland.
+       A bare IODeviceMemory::withRange() over a RAM physical address
+       cannot be mapped from userspace ("Unable to acquire map").
+       The framebuffer backing store itself (IOBufferMemoryDescriptor)
+       maps fine, and extCopyUserMemory only needs an
+       IOMemoryDescriptor, so hand it out directly. */
+    if (!fbBuf) return NULL;
+    fbBuf->retain();
+    return (IODeviceMemory *)fbBuf;
 }
 
 bool VirtIOGPUDisplay::hasDDCConnect(IOIndex connectIndex) {
