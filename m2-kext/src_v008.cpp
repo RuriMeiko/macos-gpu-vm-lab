@@ -10,6 +10,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/graphics/IOFramebuffer.h>
+#include <IOKit/IOTimerEventSource.h>
 #include <IOKit/graphics/IOGraphicsTypes.h>
 #include <mach/kmod.h>
 
@@ -95,15 +96,17 @@ private:
     bool scanoutAttached;
     UInt16 published;
 
+    IOTimerEventSource * flushTimer;
+
     bool parseCaps();
     bool handshake();
     bool initControlQueue();
     UInt32 submitCtrl(UInt32 reqLen);
     bool setupDisplayPipeline();
-    void flushWholeFb();
     void destroyPipeline();
 public:
     virtual bool init(OSDictionary * dict = 0) override;
+    void flushWholeFb();
     virtual void free() override;
     virtual bool start(IOService * provider) override;
     virtual void stop(IOService * provider) override;
@@ -177,6 +180,7 @@ bool VirtIOGPUDisplay::init(OSDictionary * dict) {
 }
 
 void VirtIOGPUDisplay::free() {
+    if (flushTimer) { flushTimer->cancelTimeout(); if (getWorkLoop()) getWorkLoop()->removeEventSource(flushTimer); flushTimer->release(); flushTimer = NULL; }
     destroyPipeline();
     if (ctrlBuf) { ctrlBuf->release(); ctrlBuf = NULL; }
     if (ringBuf) { ringBuf->release(); ringBuf = NULL; }
@@ -610,9 +614,25 @@ IOItemCount VirtIOGPUDisplay::getConnectionCount(void) {
     return 1;
 }
 
+static void timerFlushThunk(OSObject * owner, IOTimerEventSource * /*sender*/) {
+    VirtIOGPUDisplay * self = (VirtIOGPUDisplay *) owner;
+    self->flushWholeFb();
+}
+
 IOReturn VirtIOGPUDisplay::enableController(void) {
     IOLog("VGDISP: enableController\n");
     flushWholeFb();
+    if (!flushTimer) {
+        flushTimer = IOTimerEventSource::timerEventSource(this, timerFlushThunk);
+        if (flushTimer && getWorkLoop()) {
+            getWorkLoop()->addEventSource(flushTimer);
+            flushTimer->setTimeoutMS(66);
+            flushTimer->enable();
+            IOLog("VGDISP: periodic flush timer 66ms\n");
+        } else {
+            IOLog("VGDISP: flush timer init failed\n");
+        }
+    }
     return kIOReturnSuccess;
 }
 
