@@ -97,3 +97,13 @@
 - v0.0.37: timer setup bo qua (workloop NULL, guard IF) — khong panic; AGDC nub van chua attach (log "no workloop for AGDC timer"). GPUWrangler van agdc 0x000000000, accel OK 0x1000002f3.
 - AGDC errors IOPresentment: "Unable to get AGDC information 0x10000003" — kIOReturnNoResources. AppleGraphicsDeviceControl ton tai trong kernelcache (kc.bin grep).
 - qemu pkill pattern 'qemu-system-x86_64-vgpu' MISS vi cmdline QEMU that = 'qemu-system-x86_64' — dung pkill -f qemu-system-x86.
+
+## macOS GPU VM lab — update 2026-10-23 (v0.0.38-39)
+- v0.0.38: IOWorkLoop::workLoop() global thay getWorkLoop() (NULL luc start) — retry timer chay. 
+- v0.0.39: allocClassWithName("AppleGraphicsDeviceControlPlugin"→NULL, "AppleGraphicsDeviceControl" THÀNH CÔNG sau delay (kext load sau) → "AGDC nub attached to PCI (retry 0)" 05:54:41.
+- NHƯNG GPUWrangler van 'agdc 0x000000000' (nub khong duoc nhat qua per-GPU lookup) + IOPresentment van 'Unable to get AGDC information 0x10000003' → 'Unable to acquire map'.
+- KET LUAN MOI: AGDC information = du lieu GPU that (AGDC protocol GPU-phia) — tren VM khong GPU that, KHONG BAO GIO co → IOPresentment path = DEAD END tren VM. Con duong: NDRV legacy path (fb classify IONDRV nhu vmware-svga GUI boot da chung hoat dong).
+- Approve cycle van phai lam moi version; boot-args luc nao cung kiem tra config.plist co -s hay khong (da revert -v).
+- OC picker: khoang 60s sau khi boot; sau do neu serial chi co 'BdsDxe loading Boot0002' = picker chua nhan key → gui lai rightx2+enter; xac nhan bang screenshot truoc khi enter.
+- qemu pkill: dung 'pkill -f qemu-system-x86' (cmdline khong co -vgpu suffix).
+- SSH guest co the up ~90s sau boot (khac nhau).
