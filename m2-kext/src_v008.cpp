@@ -29,6 +29,8 @@
 #define VCC_Q_ENABLE 0x1C
 #define VCC_Q_NOFF   0x1E
 #define VCC_Q_DESCLO 0x20
+
+static bool setDisplayEDIDProps(IOService * fb);
 #define VCC_Q_DESCHI 0x24
 #define VCC_Q_AVAILLO 0x28
 #define VCC_Q_AVAILHI 0x2C
@@ -97,6 +99,8 @@ private:
     UInt16 published;
 
     IOTimerEventSource * flushTimer;
+    bool edidInjected;
+public:
 
     bool parseCaps();
     bool handshake();
@@ -107,6 +111,7 @@ private:
 public:
     virtual bool init(OSDictionary * dict = 0) override;
     void flushWholeFb();
+    void edidTick();
     virtual void free() override;
     virtual bool start(IOService * provider) override;
     virtual void stop(IOService * provider) override;
@@ -132,6 +137,9 @@ public:
     virtual IOReturn connectFlags(IOIndex connectIndex, IODisplayModeID displayMode, IOOptionBits * flags) override;
     virtual IOItemCount getConnectionCount(void) override;
     virtual IOReturn enableController(void) override;
+    virtual bool hasDDCConnect(IOIndex connectIndex) override;
+    virtual IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
+        IOSelect blockType, IOOptionBits options, UInt8 * data, IOByteCount * length) override;
     virtual IOReturn getAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
         uintptr_t * value) override;
     virtual IOReturn setAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
@@ -169,6 +177,8 @@ OSDefineMetaClassAndStructors(VirtIOGPUDisplay, IOFramebuffer)
 
 bool VirtIOGPUDisplay::init(OSDictionary * dict) {
     if (!IOFramebuffer::init(dict)) return false;
+    flushTimer = NULL;
+    edidInjected = false;
     pci = NULL; bar4Map = NULL; common = NULL; deviceCfg = NULL; notifyBase = NULL;
     notifyMultiplier = 0; ringVirt = NULL; ringBuf = NULL; ringPhys = 0;
     qsize = 0; availOff = 0; usedOff = 0; availNext = 0; descNext = 0;
@@ -568,6 +578,7 @@ IOReturn VirtIOGPUDisplay::getCurrentDisplayMode(IODisplayModeID * mode, IOIndex
 IOReturn VirtIOGPUDisplay::setDisplayMode(IODisplayModeID mode, IOIndex aperture) {
     IOLog("VGDISP: setDisplayMode id=%u aperture=%u\n", (unsigned)mode, (unsigned)aperture);
     if (mode != displayModeId) return kIOReturnUnsupportedMode;
+    edidTick();
     flushWholeFb();
     return kIOReturnSuccess;
 }
@@ -614,9 +625,52 @@ IOItemCount VirtIOGPUDisplay::getConnectionCount(void) {
     return 1;
 }
 
+static const UInt8 gHmlEDID[128] = {
+    0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x21, 0xAC, 0x17, 0x71, 0x22, 0x26, 0x1A, 0x18,
+    0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xEC, 0xC0, 0x61, 0x30, 0x54, 0x31, 0x58,
+    0x35, 0x54, 0x54, 0x35, 0x54, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x1B, 0xBC, 0x00, 0x05, 0x20, 0x03, 0xA0, 0x18, 0x00, 0x00,
+    0x30, 0x20, 0x86, 0x8A, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFD, 0x00, 0x3C, 0x3C, 0x32,
+    0x00, 0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0xFC, 0x00, 0x48,
+    0x4D, 0x4C, 0x20, 0x56, 0x69, 0x72, 0x74, 0x75, 0x61, 0x6C, 0x47, 0x50, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x53,
+};
+
+static bool setDisplayEDIDProps(IOService * fb) {
+    // Walk children: IODisplayConnect -> AppleDisplay, inject EDID identity.
+    IOLog("VGDISP: edid: fn enter\n");
+    // Deterministic registry lookup for our display0 under this fb.
+    IORegistryEntry * connect = IORegistryEntry::fromPath(
+        "IOService:/AppleACPIPlatformExpert/PCI0/AppleACPIPCI/S30@6/VirtIOGPUDisplay/display0",
+        gIOServicePlane);
+    if (!connect) { IOLog("VGDISP: edid: display0 path FAIL\n"); return false; }
+    IOLog("VGDISP: edid: display0 via path OK\n");
+    OSData * edidData = OSData::withBytes(gHmlEDID, 128);
+    if (edidData) {
+        connect->setProperty(kIODisplayEDIDKey, edidData);
+        edidData->release();
+    }
+    connect->setProperty(kDisplayVendorID, (unsigned long long)0xBC0B, 32);
+    connect->setProperty(kDisplayProductID, (unsigned long long)0x7117, 32);
+    OSDictionary * nm = OSDictionary::withCapacity(1);
+    if (nm) {
+        const OSSymbol * en = OSSymbol::withCString("en");
+        OSString * v = OSString::withCString("HML VirtualGPU");
+        if (en && v) nm->setObject(en, v);
+        if (en) en->release();
+        if (v) v->release();
+        connect->setProperty(kDisplayProductName, nm);
+        nm->release();
+    }
+    connect->release();
+    IOLog("VGDISP: EDID identity injected on IODisplayConnect\n");
+    return true;
+}
+
 static void timerFlushThunk(OSObject * owner, IOTimerEventSource * /*sender*/) {
     VirtIOGPUDisplay * self = (VirtIOGPUDisplay *) owner;
     self->flushWholeFb();
+    self->edidTick();
 }
 
 IOReturn VirtIOGPUDisplay::enableController(void) {
@@ -633,19 +687,57 @@ IOReturn VirtIOGPUDisplay::enableController(void) {
             IOLog("VGDISP: flush timer init failed\n");
         }
     }
+    setDisplayEDIDProps(this);
     return kIOReturnSuccess;
+}
+
+bool VirtIOGPUDisplay::hasDDCConnect(IOIndex connectIndex) {
+    IOLog("VGDISP: hasDDCConnect idx=%u -> true\n", (unsigned)connectIndex);
+    return true;
+}
+
+IOReturn VirtIOGPUDisplay::getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
+    IOSelect blockType, IOOptionBits options, UInt8 * data, IOByteCount * length) {
+    IOLog("VGDISP: getDDCBlock block=%u type=%u\n", blockNumber, (unsigned)blockType);
+    if (blockNumber != 1 || blockType != 0 /* kIODDCBlockTypeEDID */)
+        return kIOReturnUnsupported;
+    if (!data || !length || *length < 128)
+        return kIOReturnBadArgument;
+    bcopy(gHmlEDID, data, 128);
+    *length = 128;
+    return kIOReturnSuccess;
+}
+
+void VirtIOGPUDisplay::edidTick(void) {
+    IOLog("VGDISP: edidTick called (injected=%d)\n", edidInjected ? 1 : 0);
+    if (edidInjected) return;
+    edidInjected = setDisplayEDIDProps(this);
 }
 
 IOReturn VirtIOGPUDisplay::getAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
     uintptr_t * value) {
+    if (!edidInjected) edidTick();
     switch (attribute) {
         case 'cena':  // kConnectionCheckEnable — report connect enabled → online
+            if (value) *value = 1;
+            return kIOReturnSuccess;
+        case 'enab':  // kConnectionEnable — always connected/enabled
             if (value) *value = 1;
             return kIOReturnSuccess;
         case 'chng':  // kConnectionChanged — nothing pending
             if (value) *value = 0;
             return kIOReturnSuccess;
+        case 'asns':  // kConnectionSupportsAppleSense
+            if (value) *value = 1;
+            return kIOReturnSuccess;
+        case 'hddc':  // kConnectionSupportsHLDDCSense — DDC/EDID supported
+            return kIOReturnSuccess;
+        case 'prob':  // kConnectionProbe — display detection moment
+            edidTick();
+            if (value) *value = 1;   // display detected/present
+            return kIOReturnSuccess;
         default:
+            IOLog("VGDISP: getAttrForConn 0x%x idx=%u -> 0\n", (unsigned)attribute, (unsigned)connectIndex);
             if (value) *value = 0;
             return kIOReturnSuccess;
     }
@@ -653,6 +745,7 @@ IOReturn VirtIOGPUDisplay::getAttributeForConnection(IOIndex connectIndex, IOSel
 
 IOReturn VirtIOGPUDisplay::setAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
     uintptr_t value) {
+    IOLog("VGDISP: setAttrForConn 0x%x idx=%u val=%lu\n", (unsigned)attribute, (unsigned)connectIndex, (unsigned long)value);
     return kIOReturnSuccess;
 }
 
@@ -678,6 +771,7 @@ IOReturn VirtIOGPUDisplay::setCLUTWithEntries(IOColorEntry * colors, UInt32 inde
 IOReturn VirtIOGPUDisplay::getTimingInfoForDisplayMode(IODisplayModeID mode,
     IOTimingInformation * info) {
     memset(info, 0, sizeof(*info));
+    info->appleTimingID = 42; /* kIOTimingIDApple_FixedRateLCD */
     return kIOReturnSuccess;
 }
 
