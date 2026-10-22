@@ -100,6 +100,11 @@ private:
 
     IOTimerEventSource * flushTimer;
     bool edidInjected;
+    IOTimerEventSource * agdcTimer;
+    UInt32 agdcRetryCount;
+    bool agdcNubCreated;
+    void agdcRetryTick(IOTimerEventSource * timer);
+    static void agdcRetryTickThunk(OSObject * owner, IOTimerEventSource * timer);
 public:
 
     bool parseCaps();
@@ -462,6 +467,37 @@ bool VirtIOGPUDisplay::setupDisplayPipeline() {
     return true;
 }
 
+void VirtIOGPUDisplay::agdcRetryTickThunk(OSObject * owner, IOTimerEventSource * timer) {
+    ((VirtIOGPUDisplay *)owner)->agdcRetryTick(timer);
+}
+
+void VirtIOGPUDisplay::agdcRetryTick(IOTimerEventSource * timer) {
+    if (agdcNubCreated) return;
+    IOService * agdcNub = (IOService *)OSMetaClass::allocClassWithName("AppleGraphicsDeviceControl");
+    if (agdcNub) {
+        if (agdcNub->init()) {
+            if (agdcNub->attach(pci)) {
+                agdcNub->registerService();
+                agdcNubCreated = true;
+                IOLog("VGDISP: AGDC nub attached to PCI (retry %u)\n", agdcRetryCount);
+                agdcTimer->cancelTimeout();
+                return;
+            }
+            IOLog("VGDISP: AGDC nub attach FAILED (retry %u)\n", agdcRetryCount);
+            agdcNub->release();
+        } else { agdcNub->release(); }
+    } else {
+        IOLog("VGDISP: AGDC alloc NULL (retry %u)\n", agdcRetryCount);
+    }
+    agdcRetryCount++;
+    if (agdcRetryCount > 20) {
+        IOLog("VGDISP: AGDC retries exhausted\n");
+        agdcTimer->cancelTimeout();
+        return;
+    }
+    agdcTimer->setTimeoutMS(2000);
+}
+
 void VirtIOGPUDisplay::flushWholeFb() {
     if (!scanoutAttached) return;
     struct vgpu_transfer2d * t2 = (struct vgpu_transfer2d *)ctrlVirt;
@@ -521,6 +557,22 @@ bool VirtIOGPUDisplay::start(IOService * provider) {
        IOAcceleratorFamily2 so GPUWrangler's class-based accel
        lookup finds it (plain IOService nubs are ignored). */
     IOService * accelNub = (IOService *)OSMetaClass::allocClassWithName("IOAccelerator");
+    /* v0.0.35/36: AGDC control service on the PCI device so GPUWrangler's
+       per-GPU `agdc` lookup is non-zero. Class is registered by
+       AppleGraphicsControl.kext which may load AFTER us, so retry
+       on a delayed timer. */
+    agdcRetryCount = 0;
+    agdcNubCreated = false;
+    IOWorkLoop * wl = IOWorkLoop::workLoop();  /* fb workloop not ready at start(); use a global one */
+    if (wl) {
+        agdcTimer = IOTimerEventSource::timerEventSource(this, (IOTimerEventSource::Action)&VirtIOGPUDisplay::agdcRetryTickThunk);
+        if (agdcTimer) {
+            wl->addEventSource(agdcTimer);
+            agdcTimer->setTimeoutMS(3000);
+        }
+    } else {
+        IOLog("VGDISP: no workloop for AGDC timer\\n");
+    }
     if (!accelNub) {
         accelNub = new IOService;  /* fallback: plain nub */
         IOLog("VGDISP: IOAccelerator class alloc FAILED, using plain nub\n");
