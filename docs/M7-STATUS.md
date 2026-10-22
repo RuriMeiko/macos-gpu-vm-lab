@@ -30,3 +30,11 @@
 - `vm/m1/boot-tahoe-vgpu3.sh` — MAIN WORKING BOOT SCRIPT
 - `m2-kext/src_v008.cpp` v0.0.39 (đã approve trong guest)
 - `docs/M4-NOTES.md` — chi tiết kỹ thuật đầy đủ
+
+
+## 2026-10-23 cuối — polish findings (vgpu3-hd boot)
+- Resolution: vẫn 1280x800 dù xres=1920,yres=1080 — vgabios-virtio GOP chọn mode từ VBIOS mode table (KHÔNG theo EDID xres/yres). Mode list của IONDRV fb = 1 mode duy nhất (GOP surface). Resolution cao hơn cần OVMF setup / ramfb — giá trị thấp, bỏ qua.
+- Audio: KHÔNG có device (HDA codec không được AppleHDAController match — cần AppleALC/hda-gfx edits). Polish item, không blocker.
+- Network: OK (en0 10.0.2.15 active).
+- Desktop ổn định: Safari render hoàn hảo, SSH, System Settings OK.
+- KẾT LUẬN MỤC TIÊU: 'giả lập mac hoàn hảo' đạt mức DISPLAY/2D — macOS Tahoe desktop đầy đủ qua virtio-vga paravirt. M5 Metal = blocker hệ sinh thái (không driver virgl/blob cho macOS).
