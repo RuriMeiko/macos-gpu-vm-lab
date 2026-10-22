@@ -5,14 +5,11 @@ Research notes and tooling for running a **macOS guest with GPU acceleration** o
 
 **Status: early research. Nothing here is proven to work yet.**
 
-## Tracks
+## Approach
 
-| Track | Idea | Expected difficulty |
-|---|---|---|
-| A. VFIO passthrough | Give the guest the whole NVIDIA card; guest uses the community [nullmoth/nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver) | Medium. Needs a second GPU (or headless host). Ampere is unverified upstream. |
-| B. Shared GPU (paravirtual) | Guest macOS draws through the host's Vulkan (virtio-gpu Venus) | Research-grade. No macOS virtio-gpu driver exists. |
-
-Track A comes first because it is the only one with a realistic path to full acceleration.
+Main track: **paravirtual GPU, no passthrough**. The guest draws through a virtio-gpu device using Venus
+(Vulkan over virtio) while the host keeps its GPU. Passthrough is only a fallback/baseline.
+See [docs/PLAN.md](docs/PLAN.md) for architecture and milestones (M0 to M7).
 
 ## Rules of this repo
 
