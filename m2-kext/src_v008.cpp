@@ -511,6 +511,34 @@ bool VirtIOGPUDisplay::start(IOService * provider) {
        paravirt identity so CoreDisplay picks the paravirt framebuffer path
        instead of falling through to a virtual/offline framebuffer. */
     setProperty("AppleParavirtFramebuffer", "true");
+    /* CoreDisplay's IOPresentment pipeline resolves the display pipe
+       through IOAccelDisplayPipeCreate(), which opens a user client
+       on an IOAccelerator service. Without one, GPUWrangler logs
+       "accel 0x000000000" and pipe creation fails ("Unable to
+       acquire map"). Publish an IOAccelerator nub so the stock
+       IOAccelDisplayPipe user client can attach. */
+    /* Instantiate the real IOAccelerator class from the loaded
+       IOAcceleratorFamily2 so GPUWrangler's class-based accel
+       lookup finds it (plain IOService nubs are ignored). */
+    IOService * accelNub = (IOService *)OSMetaClass::allocClassWithName("IOAccelerator");
+    if (!accelNub) {
+        accelNub = new IOService;  /* fallback: plain nub */
+        IOLog("VGDISP: IOAccelerator class alloc FAILED, using plain nub\n");
+    }
+    if (accelNub) {
+        if (accelNub->init() == false || accelNub->attach(pci) == false) {
+            accelNub->release();
+        } else {
+            accelNub->setName("IOAccelerator");
+            OSNumber * idxNum = OSNumber::withNumber((unsigned long long)0, 32);
+            if (idxNum) { accelNub->setProperty("IOAccelIndex", idxNum); idxNum->release(); }
+            OSNumber * revNum = OSNumber::withNumber((unsigned long long)1, 32);
+            if (revNum) { accelNub->setProperty("IOAccelRevision", revNum); revNum->release(); }
+            accelNub->setProperty("IOAccelTypes", "IOAccelDisplayPipe;");
+            accelNub->registerService(kIOServiceAsynchronous);
+            accelNub->release();
+        }
+    }
     registerService();
     IOLog("VGDISP: === v0.0.8 IOFramebuffer %ux%u started ===\n", displayW, displayH);
     return true;
