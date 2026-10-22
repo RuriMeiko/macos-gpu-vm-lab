@@ -116,3 +116,12 @@
 - Bài toán còn lại: chuyển desktop render sang fb kext. Các hướng: (a) NDRV shim thật cho kext fb; (b) ép CoreDisplay VirtDisplay online (VFBHWFillRegion fbAddress) trỏ fb kext; (c) hybrid hiện tại: desktop trên vmware fb + kext fb thứ 2 offline — VNC vẫn desktop (không cần kext scanout) — NHƯNG đó KHÔNG phải 'giả lập mac hoàn hảo' qua virtio.
 - qemu v2 binary: qemu-system-x86_64-vgpu2 (class DISPLAY_VGA) — KHÔNG dùng được cho boot-fb virtio. Giữ vgpu (class OTHERS) cho kext.
 - Scripts mới: boot-tahoe-vmware.sh (desktop-only test), boot-tahoe-hybrid.sh (vmware+virtio), boot-tahoe-vgpu2.sh (class VGA — dead).
+
+## vgpu3 BREAKTHROUGH (2026-10-23 ~06:35)
+- boot-tahoe-vgpu3.sh: qemu v2 (class VGA) + '-device virtio-vga,edid=on' (thay virtio-gpu-pci + -vga none) — cần -L /usr/share/seabios (vgabios-virtio.bin).
+- KẾT QUẢ: '.Display_boot' IONDRVFramebuffer TẠO TRÊN VIRTIO-VGA device (1af4:1050)! WindowServer LEGACY path → DESKTOP macOS FULL, main display = virtio (system_profiler: Vendor 0x1af4 Device 0x1050, 1280x800, Online Yes). VNC + QEMU screendump xác nhận desktop.
+- Cơ chế: virtio-vga có VGA legacy BARs + vgabios-virtio → OVMF GOP console = virtio → IOBootNDRV match → .Display_boot (có display0 + IOFBConfig) → WS legacy path → desktop.
+- MẠCH: IOBootNDRV tạo .Display_boot CHỈ khi OVMF GOP console fb nằm trên device đó (vgabios của device đó). virtio-gpu-pci (không vgabios) → không GOP console → không .Display_boot. Đây là mạch giải thích mọi kết quả trước (vmware works, virtio-gpu-pci dead, class-VGA virtio-gpu dead).
+- KEXT v0.0.39: loaded NHƯNG KHÔNG attach (VirtIOGPUDisplay=0) — IOBootNDRV chiếm IOFramebuffer category trên device (fb conflict). Kext fb không cần cho display nữa — M4' display = .Display_boot legacy fb trên virtio-vga VGA BAR (QEMU ramfb-style).
+- Bước tiếp (M5 Metal/3D hoặc hoàn thiện M4'): kext fb có thể dùng làm compositor target? Metal cần IOAccelerator — vẫn chưa có. Đánh giá: desktop ổn, độ trễ chuột/keyboard OK, resolution 1280x800.
+- Scripts: boot-tahoe-vgpu3.sh (CURRENT WORKING). boot-tahoe-hybrid.sh (desktop + kext scanout phụ). vgpu/vgpu2 = dead cho display.
