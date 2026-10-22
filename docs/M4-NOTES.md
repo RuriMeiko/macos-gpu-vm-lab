@@ -62,3 +62,25 @@
   WindowServer read the paravirt key (find actual source — maybe IODT /provider props or IOFB attribute).
 - Alternative route: change virtio-gpu device-id to 0x106b:0x1a0b (AppleVirtIOPCITransport match) —
   but AppleM2ScalerParavirtDriver requires AppleARMPlatform (x86 dead end).
+
+## v0.0.30 — getVRAMRange returns fbBuf — acquire map PERSISTS
+- Returned fbBuf (IOBufferMemoryDescriptor) directly as VRAM aperture → still "Unable to acquire map".
+- IOPresentment.framework on disk is EMPTY (Resources+CodeSignature only) — code lives in dyld shared cache; can't strings it directly.
+- 'IOSurfaceRootParavirtMapperInterface' instance count = 0 → IOPresentment's surface mapper missing.
+  AppleParavirtIOSurface.kext provides it but requires AppleARMIODevice 'paravirtualizedgraphics,iosurface' — ARM-only. Dead end on x86.
+- Commit f341bf8.
+
+## GUI-boot vs vgpu-boot divergence (key insight)
+- GUI boot (vmware-svga + IONDRV fw framebuffer): NO 'Creating FB'/'acquire map' lines — CoreDisplay uses
+  a legacy path for IONDRV fbs, no IOPresentment pipeline.
+- vgpu boot (our kext): CoreDisplay runs the modern IOPresentment path, which needs the paravirt surface
+  mapper (absent on x86) → virtual framebuffer fallback.
+- Reconciliation: to get online on vgpu boot we must either (a) make CoreDisplay treat our fb as a
+  legacy/IONDRV-class device (e.g. present an NDRV-like interface or IOFramebuffer with the right
+  probe properties), or (b) satisfy IOPresentment's mapping handshake some other way.
+
+## Next
+- Study how CoreDisplay picks legacy vs IOPresentment path (hint: IONDRV check via IOKit registry
+  'IONDRVFramebuffer' class or IOFB attributes like kIOFBVendorKey / 'NDrv' presence).
+- Consider writing a minimal NDRV shim: IOFramebuffer subclass exposing getInterfaceTable for
+  IOFramebufferInstanceData / 'nub' with kIONDRVModuleKey.
