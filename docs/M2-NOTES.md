@@ -23,3 +23,25 @@
 - Remote Login bật bằng `sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist`
   (systemsetup bị chặn Full Disk Access; launchctl im lặng = thành công).
 - vncdo type: pipe '|' phải gõ bằng `keydown shift + key \ + keyup shift` — type() lỗi pipe.
+
+## M2 COMPLETE (2026-10-22 17:10 +07): custom kext matched virtio-gpu, đọc config/features
+
+- Kext `VirtIOGPUProbe` (com.mylab.VirtIOGPUProbe v0.0.1) build trong guest bằng clang 21 (CLT 26.6):
+  `clang++ -mkernel -DKERNEL -DKEXT_COMPILE ...` + `ld -kext` → Mach-O kext bundle x86_64.
+- Headers: clone Kernel.framework Headers về ~/m2-kext/khdr, XOÁ PCIDriverKit/ để
+  __has_include(<PCIDriverKit/IOPCIDevice.h>)=0 (nếu không, class IOPCIDevice kext bị
+  branch ra DriverKit variant → lỗi OSClassLoadInformation). KHÔNG dùng -nostdinc? —
+  DÙNG -nostdinc -nostdinc++ -Ikhdr -I<sdk>/usr/include (chặn SDK framework paths).
+- kmod_info_t kmod_info {next=NULL, ver=1, name, version, ...} + dummy start/stop
+  (không có → "NULL module start pointer" 0xdc008007).
+- Info.plist: IOPCIPrimaryMatch = **0x10501af4&0xffffffff** (device<<16|vendor! — nhầm
+  0x00001050 ban đầu thì match không hit).
+- Load flow: kextload → "requires a reboot" → approve trong Privacy&Security (Allow +
+  admin password) → reboot → kextload lại (kext aux staged không tự load).
+- KẾT QUẢ: kext matched (IOProbeScore=0, active), probe() hit, PCI vendor caps parsed:
+  common cfg BAR4 off 0 len 4096; notify BAR4; ISR BAR4 4096; device cfg BAR4 off 8192;
+  deviceFeatures=0x0000_0001_0000ffff (VIRTIO_F_VERSION_1 + notify...).
+- TODO M3+: mapDeviceMemoryWithRegister BAR index dùng kIOPCIConfigBaseAddress0 + bar*4
+  — deviceID đọc ra 0x1 (magic 0x1) → đang map nhầm BAR0 (legacy I/O) thay vì BAR4.
+  Dùng pci->getDeviceMemoryWithIndex(bar) hoặc map theo BAR value decode.
+- sysctl/log: kext printf qua serial.log (grep "VirtIOGPUProbe:").

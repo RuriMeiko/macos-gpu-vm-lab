@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.mylab.VirtIOGPUProbe</string>
+  <key>CFBundleExecutable</key><string>VirtIOGPUProbe</string>
+  <key>CFBundlePackageType</key><string>KEXT</string>
+  <key>CFBundleVersion</key><string>0.0.1</string>
+  <key>OSBundleLibraries</key>
+  <dict>
+    <key>com.apple.kpi.iokit</key><string>15.5</string>
+    <key>com.apple.kpi.libkern</key><string>15.5</string>
+    <key>com.apple.kpi.mach</key><string>15.5</string>
+    <key>com.apple.iokit.IOPCIFamily</key><string>2.9</string>
+  </dict>
+  <key>IOKitPersonalities</key>
+  <dict>
+    <key>VirtIOGPUProbeDirect</key>
+    <dict>
+      <key>CFBundleIdentifier</key><string>com.mylab.VirtIOGPUProbe</string>
+      <key>IOClass</key><string>VirtIOGPUProbe</string>
+      <key>IOProviderClass</key><string>IOPCIDevice</string>
+      <key>IOPCIPrimaryMatch</key><string>0x10501af4&amp;0xffffffff</string>
+      <key>IOProbeScore</key><string>20000</string>
+      <key>IOMatchCategory</key><string>MyVirtIOGPU</string>
+    </dict>
+  </dict>
+</dict>
+</plist>
