@@ -107,3 +107,12 @@
 - OC picker: khoang 60s sau khi boot; sau do neu serial chi co 'BdsDxe loading Boot0002' = picker chua nhan key → gui lai rightx2+enter; xac nhan bang screenshot truoc khi enter.
 - qemu pkill: dung 'pkill -f qemu-system-x86' (cmdline khong co -vgpu suffix).
 - SSH guest co the up ~90s sau boot (khac nhau).
+
+## 2026-10-23 buổi sáng — pivot + hybrid findings
+- Confirm: vmware-svga boot = desktop FULL (legacy .Display_boot IONDRVFramebuffer trên PCI vmware, có display0). Legacy path SỐNG trên Tahoe x86.
+- Hybrid boot (vgpu qemu + vmware-svga + virtio-gpu): desktop FULL + kext fb loaded NHƯNG kext fb vẫn offline (IOPresentment modern path — system_profiler không thấy kext display).
+- vgpu2 (virtio class VGA thay OTHERS): OVMF mất console (Display output is not active qua VNC, serial vẫn boot). IONDRVSupport 'display' personality tạo IONDRVFramebuffer trên virtio NHƯNG KHÔNG có display0 (không phải boot-fb pseudo-NDRV; .Display_boot KHÔNG được tạo vì GOP surface không đăng ký). → class VGA là ngõ cụt.
+- Cơ chế: .Display_boot (có display0) chỉ được tạo khi OVMF GOP boot console nằm trên device đó (vmware vgabios). Virtio GOP của OVMF không tạo boot-fb pseudo-NDRV.
+- Bài toán còn lại: chuyển desktop render sang fb kext. Các hướng: (a) NDRV shim thật cho kext fb; (b) ép CoreDisplay VirtDisplay online (VFBHWFillRegion fbAddress) trỏ fb kext; (c) hybrid hiện tại: desktop trên vmware fb + kext fb thứ 2 offline — VNC vẫn desktop (không cần kext scanout) — NHƯNG đó KHÔNG phải 'giả lập mac hoàn hảo' qua virtio.
+- qemu v2 binary: qemu-system-x86_64-vgpu2 (class DISPLAY_VGA) — KHÔNG dùng được cho boot-fb virtio. Giữ vgpu (class OTHERS) cho kext.
+- Scripts mới: boot-tahoe-vmware.sh (desktop-only test), boot-tahoe-hybrid.sh (vmware+virtio), boot-tahoe-vgpu2.sh (class VGA — dead).
