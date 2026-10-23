@@ -50,48 +50,49 @@ static void trace_line(AppleGfxTrace *s, const char *dir, hwaddr addr,
 
 
 /*
- * Doorbell (offset 0x1008): the register meanings are unknown, so probe each value the driver programmed
- * (0x1004, 0x101c, 0x1030) as a guest address under several shifts and log only locations that hold data.
+ * Doorbell (register block base + 8, i.e. BAR0 0x1008).
+ * Decoded from AppleParavirtGPU setupFIFO: the driver allocates a 64 KB buffer, zeroes page 0 (header), puts
+ * commands from +0x1000, and programs block+0x30 = physical address >> 12, block+4 = length, block+0x10 = 0x1000.
+ * A second buffer is programmed through block+0x1c the same way. Dump header page and command area of both.
  */
+static void hexdump_guest(AppleGfxTrace *s, const char *tag, uint64_t gpa, int len)
+{
+    uint8_t buf[0x200];
+    MemTxResult r = pci_dma_read(PCI_DEVICE(s), gpa, buf, len);
+
+    fprintf(s->log, "  d%u %s gpa=0x%" PRIx64 " len=0x%x %s\n", s->dumps, tag, gpa, len,
+            r == MEMTX_OK ? "ok" : "DMAFAIL");
+    if (r != MEMTX_OK) {
+        return;
+    }
+    for (int off = 0; off < len; off += 16) {
+        fprintf(s->log, "    %03x:", off);
+        for (int b2 = 0; b2 < 16; b2++) {
+            fprintf(s->log, " %02x", buf[off + b2]);
+        }
+        fputc('\n', s->log);
+    }
+}
+
 static void dump_guest_pages(AppleGfxTrace *s)
 {
-    static const hwaddr regs[3] = { 0x1004, 0x101c, 0x1030 };
-    static const int shifts[4] = { 12, 8, 4, 0 };
-    PCIDevice *pdev = PCI_DEVICE(s);
-    uint8_t buf[0x100];
+    static const struct { hwaddr reg; const char *name; } fifos[2] = {
+        { 0x1030, "fifoA" }, { 0x101c, "fifoB" },
+    };
 
     if (s->dumps >= 16 || !s->log) {
         return;
     }
     s->dumps++;
-    for (int i = 0; i < 3; i++) {
-        uint32_t v;
+    for (int i = 0; i < 2; i++) {
+        uint32_t pfn;
+        char tag[32];
 
-        memcpy(&v, s->mem + regs[i], 4);
-        for (int j = 0; j < 4; j++) {
-            uint64_t gpa = (uint64_t)v << shifts[j];
-            bool nz = false;
-
-            if (pci_dma_read(pdev, gpa, buf, sizeof(buf)) != MEMTX_OK) {
-                fprintf(s->log, "  d%u reg=0x%" HWADDR_PRIx " v=0x%x shl=%d gpa=0x%" PRIx64 " DMAFAIL\n",
-                        s->dumps, regs[i], v, shifts[j], gpa);
-                continue;
-            }
-            for (int k = 0; k < (int)sizeof(buf); k++) {
-                nz |= buf[k] != 0;
-            }
-            fprintf(s->log, "  d%u reg=0x%" HWADDR_PRIx " v=0x%x shl=%d gpa=0x%" PRIx64 " %s\n",
-                    s->dumps, regs[i], v, shifts[j], gpa, nz ? "DATA" : "zero");
-            if (nz) {
-                for (int off = 0; off < (int)sizeof(buf); off += 16) {
-                    fprintf(s->log, "    %03x:", off);
-                    for (int b2 = 0; b2 < 16; b2++) {
-                        fprintf(s->log, " %02x", buf[off + b2]);
-                    }
-                    fputc('\n', s->log);
-                }
-            }
-        }
+        memcpy(&pfn, s->mem + fifos[i].reg, 4);
+        snprintf(tag, sizeof(tag), "%s.header", fifos[i].name);
+        hexdump_guest(s, tag, (uint64_t)pfn << 12, 0x40);
+        snprintf(tag, sizeof(tag), "%s.data", fifos[i].name);
+        hexdump_guest(s, tag, ((uint64_t)pfn << 12) + 0x1000, 0xa0);
     }
     fflush(s->log);
 }
