@@ -17,6 +17,7 @@
 #include "hw/pci/msi.h"
 #include "hw/qdev-properties.h"
 #include "qom/object.h"
+#include "system/dma.h"
 
 #define TYPE_APPLEGFX_TRACE "applegfx-trace"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleGfxTrace, APPLEGFX_TRACE)
@@ -31,6 +32,7 @@ struct AppleGfxTrace {
     char *logpath;
     uint32_t bar0_size;
     uint32_t readfill;
+    uint32_t dumps;      /* doorbell dumps done so far */
 };
 
 static void trace_line(AppleGfxTrace *s, const char *dir, hwaddr addr,
@@ -42,6 +44,54 @@ static void trace_line(AppleGfxTrace *s, const char *dir, hwaddr addr,
     fprintf(s->log, "%" PRIu64 " t=%" PRId64 " %s off=0x%05" HWADDR_PRIx
             " size=%u val=0x%" PRIx64 "\n", s->seq++,
             qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL), dir, addr, size, val);
+    fflush(s->log);
+}
+
+
+/*
+ * Doorbell (offset 0x1008): the register meanings are unknown, so probe each value the driver programmed
+ * (0x1004, 0x101c, 0x1030) as a guest address under several shifts and log only locations that hold data.
+ */
+static void dump_guest_pages(AppleGfxTrace *s)
+{
+    static const hwaddr regs[3] = { 0x1004, 0x101c, 0x1030 };
+    static const int shifts[4] = { 12, 8, 4, 0 };
+    PCIDevice *pdev = PCI_DEVICE(s);
+    uint8_t buf[0x100];
+
+    if (s->dumps >= 16 || !s->log) {
+        return;
+    }
+    s->dumps++;
+    for (int i = 0; i < 3; i++) {
+        uint32_t v;
+
+        memcpy(&v, s->mem + regs[i], 4);
+        for (int j = 0; j < 4; j++) {
+            uint64_t gpa = (uint64_t)v << shifts[j];
+            bool nz = false;
+
+            if (pci_dma_read(pdev, gpa, buf, sizeof(buf)) != MEMTX_OK) {
+                fprintf(s->log, "  d%u reg=0x%" HWADDR_PRIx " v=0x%x shl=%d gpa=0x%" PRIx64 " DMAFAIL\n",
+                        s->dumps, regs[i], v, shifts[j], gpa);
+                continue;
+            }
+            for (int k = 0; k < (int)sizeof(buf); k++) {
+                nz |= buf[k] != 0;
+            }
+            fprintf(s->log, "  d%u reg=0x%" HWADDR_PRIx " v=0x%x shl=%d gpa=0x%" PRIx64 " %s\n",
+                    s->dumps, regs[i], v, shifts[j], gpa, nz ? "DATA" : "zero");
+            if (nz) {
+                for (int off = 0; off < (int)sizeof(buf); off += 16) {
+                    fprintf(s->log, "    %03x:", off);
+                    for (int b2 = 0; b2 < 16; b2++) {
+                        fprintf(s->log, " %02x", buf[off + b2]);
+                    }
+                    fputc('\n', s->log);
+                }
+            }
+        }
+    }
     fflush(s->log);
 }
 
@@ -65,6 +115,9 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     trace_line(s, "W", addr, size, val);
     if (addr + size <= s->bar0_size) {
         memcpy(s->mem + addr, &val, size);
+    }
+    if (addr == 0x1008) {
+        dump_guest_pages(s);
     }
 }
 
