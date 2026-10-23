@@ -218,6 +218,28 @@ static void fifoB_reply(AppleGfxTrace *s)
     uint32_t prod = desc[0], cons = desc[1], ring_pfn = desc[4];
     fprintf(s->log, "reply: desc prod=0x%x cons=0x%x flushid=0x%x id=%u ring_pfn=0x%x\n",
             prod, cons, desc[2], desc[3] & 0xffff, ring_pfn);
+    /*
+     * M5i: dump the FULL root shared block (0x890 bytes, setupRoot alloc size)
+     * so we can see every field incl. the real descriptor & ring PFN.
+     */
+    {
+        uint8_t blk[0x890];
+        if (pci_dma_read(PCI_DEVICE(s), fifoB_base, blk, sizeof(blk)) == MEMTX_OK) {
+            fprintf(s->log, "reply: root block dump (0x890 bytes):");
+            int nz = 0;
+            for (int i = 0; i < 0x890; i++) if (blk[i]) nz++;
+            fprintf(s->log, " nonzero=%d\n", nz);
+            for (int off = 0; off < 0x890; off += 16) {
+                const uint8_t *r = blk + off;
+                bool any = false;
+                for (int k = 0; k < 16; k++) if (r[k]) { any = true; break; }
+                if (!any) continue;
+                fprintf(s->log, "  +%03x:", off);
+                for (int k = 0; k < 16; k++) fprintf(s->log, " %02x", r[k]);
+                fputc('\n', s->log);
+            }
+        }
+    }
     fflush(s->log);
 
     /* consume every complete message in fifoA between rd and wr (wrap-safe);
