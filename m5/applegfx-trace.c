@@ -297,12 +297,12 @@ static void fifoB_reply(AppleGfxTrace *s)
         else seglen = 16;
         if (!seglen || seglen > 0x400) seglen = 16;
         uint32_t dcur = wr;              /* driver cmd cursor (doorbell) */
-        uint32_t space = (prod >= dcur) ? (ring_size - (prod - dcur))
-                                        : (dcur - prod);
-        if (space < seglen + 4) {
-            fprintf(s->log, "reply: fifoA ring full (prod=0x%x dcur=0x%x)\n", prod, dcur);
-            break;
-        }
+        /*
+         * M6q: reply cursor có thể vượt/vấp dcur — KHÔNG check full với
+         * dcur nữa (driver doorbell cursor không phải giới hạn reply).
+         * Ring chỉ wrap theo size.
+         */
+        (void)dcur;
         uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         uint8_t segbuf[0x400];
         memset(segbuf, 0, sizeof(segbuf));
