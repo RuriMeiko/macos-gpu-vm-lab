@@ -49,6 +49,7 @@ struct AppleGfxTrace {
     uint32_t readfill;
     uint32_t dumps;      /* doorbell dumps done so far */
     uint32_t last_db;    /* last value written to the doorbell (0x1008) */
+    uint32_t reply_cur;  /* device reply cursor (M5v, posted into +0x0c) */
     bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
     uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
@@ -171,13 +172,12 @@ static void fifoB_reply(AppleGfxTrace *s)
     uint32_t rd = reg_r32(s, REG_READ);
     uint32_t buflen = reg_r32(s, REG_LENGTH);
     /*
-     * M5f finding: doorbell value = cumulative END OFFSET of the last message
-     * written, offsets are relative to the COMMAND AREA start (0 is valid).
-     * REG +0x0c is the consumer cursor the driver reads back (we advance it).
-     * But M5f also showed wr reg holds the doorbell VALUE (0x1c/0x34/...) since
-     * the driver writes its producer cursor INTO +0x08 as the doorbell — so
-     * REG_WRITE readback == doorbell value == producer cursor. Offsets are in
-     * cmd-area space: gpa = fifoA_base + 0x1000 + cursor.
+     * M5v model: fifoA is ONE ring shared both ways.
+     *   +0x08 = driver->device cursor (doorbell: end offset of driver cmds)
+     *   +0x0c = device->driver cursor (end offset of device reply segments)
+     * Driver's reader waits for segdesc+4 (device producer) — synced from
+     * MMIO +0x0c; replies are placed at cmd-area offset = device reply
+     * cursor, then +0x0c updated, then MSI raised.
      */
     if (rd > buflen - 0x1000) {
         fprintf(s->log, "reply: read ptr 0x%x out of range, ignoring\n", rd);
@@ -237,6 +237,39 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint32_t op = hdr[0];
 
         /*
+         * M5n: reader 0x148a9e56 spins on [segdesc+0x4] producer in shared
+         * memory; segdesc = {prod@0, cons@4, flushid@8, id@c, ringpfn@10}.
+         * Candidate segdesc PA: op-0x38 payload[3] = PFN (0x202f55 / 0x1f0996
+         * / ... varies per boot). Dump it + reply into it.
+         */
+        if (op == 0x38 && hdr[1] >= 28 && ((uint32_t *)msg)[3] == 1) {
+            uint32_t cand = ((uint32_t *)msg)[6];
+            uint32_t page[1024];
+            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)cand << 12, page,
+                             sizeof(page)) == MEMTX_OK) {
+                fprintf(s->log, "reply: op38 pfn 0x%x dump:", cand);
+                for (int i = 0; i < 16; i++) {
+                    if (page[i]) fprintf(s->log, " +%x=%08x", i * 4, page[i]);
+                }
+                fprintf(s->log, "\n");
+                fflush(s->log);
+            }
+        }
+        if (op == 0x3a && hdr[1] >= 24) {
+            uint32_t cand = ((uint32_t *)msg)[6];
+            uint32_t page[1024];
+            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)cand << 12, page,
+                             sizeof(page)) == MEMTX_OK) {
+                fprintf(s->log, "reply: op3a pfn 0x%x dump:", cand);
+                for (int i = 0; i < 32; i++) {
+                    if (page[i]) fprintf(s->log, " +%x=%08x", i * 4, page[i]);
+                }
+                fprintf(s->log, "\n");
+                fflush(s->log);
+            }
+        }
+
+        /*
          * M5m: per-message slot {idx@+0xc, ptab_pfn@+0x10} (stride 0x14) là
          * IOMMU page-table bookkeeping — KHÔNG phải reply channel. Reply
          * quay về CÙNG fifoA ring: device ghi segment tại cursor producer
@@ -244,13 +277,18 @@ static void fifoB_reply(AppleGfxTrace *s)
          * producer cursor), set masks + MSI. Driver ISR sẽ đọc reg +0x8,
          * update segdesc producer và chạy reader.
          */
-        uint32_t prod = wr;              /* device producer cursor = last doorbell */
+        /*
+         * M5v: reply vào offset cursor DEVICE-OWNED (reg +0x0c hiện tại = 0
+         * lần đầu). Cursor reply riêng — KHÔNG dùng doorbell cursor.
+         */
+        uint32_t prod = s->reply_cur;
         uint32_t ring_size = cmdbytes;   /* fifoA cmd area size (0xf000) */
         uint32_t seglen = 28;
-        uint32_t space = (prod >= rd) ? (ring_size - (prod - rd))
-                                      : (rd - prod);
+        uint32_t dcur = wr;              /* driver cmd cursor (doorbell) */
+        uint32_t space = (prod >= dcur) ? (ring_size - (prod - dcur))
+                                        : (dcur - prod);
         if (space < seglen + 4) {
-            fprintf(s->log, "reply: fifoA ring full (prod=0x%x rd=0x%x)\n", prod, rd);
+            fprintf(s->log, "reply: fifoA ring full (prod=0x%x dcur=0x%x)\n", prod, dcur);
             break;
         }
         uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -270,10 +308,11 @@ static void fifoB_reply(AppleGfxTrace *s)
             break;
         }
         uint32_t nprod = prod + seglen;
-        reg_w32(s, REG_WRITE, nprod);            /* device-owned producer cursor */
+        reg_w32(s, REG_READ, nprod);     /* device reply cursor -> +0x0c */
+        s->reply_cur = nprod;
         fprintf(s->log,
-                "reply: posted seq=%u -> fifoA prod 0x%x->0x%x (rd=0x%x)\n",
-                seq, prod, nprod, rd);
+                "reply: posted seq=%u -> fifoA reply 0x%x->0x%x (dcur=0x%x)\n",
+                seq, prod, nprod, dcur);
         s->repl_seq = seq;
         replies++;
 
@@ -316,9 +355,8 @@ static uint64_t gfx_mmio_read(void *opaque, hwaddr addr, unsigned size)
     if (addr + size <= s->bar0_size) {
         memcpy(&val, s->mem + addr, size);   /* little-endian host/guest */
     }
-    if (addr == 0x100c && size == 4) {
-        val = s->last_db;                     /* experiment: consumer == producer */
-    }
+    /* M5v: +0x0c là reply cursor của device (reg_w32 đã ghi vào s->mem) —
+     * bỏ override last_db cũ (M5f) để driver đọc đúng giá trị. */
     trace_line(s, "R", addr, size, val);
     return val;
 }
