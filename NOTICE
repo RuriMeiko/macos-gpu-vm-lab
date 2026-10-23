@@ -1,0 +1,12 @@
+macos-gpu-vm-lab: third-party components and licensing
+
+This repository is licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE): personal, research and
+educational use only. Files first committed before 2026-10-23 were published under the MIT license; that grant
+stays valid for the copies already published, new work is noncommercial only.
+
+If code from another project is copied into this repo, keep its own notices here:
+- NullMoth NVIDIA driver, PolyForm Noncommercial 1.0.0: keep its "Required Notice" line.
+  Required Notice: Copyright (c) 2026 NullMoth Systems (https://nullmothsystems.com)
+- NullMoth translator/ (based on metal2vulkan), LGPL-3.0-or-later: files copied from it stay LGPL.
+- QEMU (GPL-2.0): m5/applegfx-trace.c is built into a QEMU tree and is distributed as source only.
+No Apple binaries, firmware or installers are ever committed.

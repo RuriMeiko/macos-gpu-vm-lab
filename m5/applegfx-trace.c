@@ -7,7 +7,7 @@
  * RAM-backed buffer, so values the guest wrote can be read back. Purpose:
  * find out what the stock guest driver probes first, before writing a real device.
  *
- * Lab code, MIT licensed like the rest of this repo.
+ * Lab code, PolyForm Noncommercial like the rest of this repo (see LICENSE). Built into QEMU (GPL-2.0).
  */
 #include "qemu/osdep.h"
 #include "qapi/error.h"
@@ -33,6 +33,7 @@ struct AppleGfxTrace {
     uint32_t bar0_size;
     uint32_t readfill;
     uint32_t dumps;      /* doorbell dumps done so far */
+    uint32_t last_db;    /* last value written to the doorbell (0x1008) */
 };
 
 static void trace_line(AppleGfxTrace *s, const char *dir, hwaddr addr,
@@ -103,6 +104,9 @@ static uint64_t gfx_mmio_read(void *opaque, hwaddr addr, unsigned size)
     if (addr + size <= s->bar0_size) {
         memcpy(&val, s->mem + addr, size);   /* little-endian host/guest */
     }
+    if (addr == 0x100c && size == 4) {
+        val = s->last_db;                     /* experiment: consumer == producer */
+    }
     trace_line(s, "R", addr, size, val);
     return val;
 }
@@ -117,6 +121,7 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         memcpy(s->mem + addr, &val, size);
     }
     if (addr == 0x1008) {
+        s->last_db = val;
         dump_guest_pages(s);
     }
 }

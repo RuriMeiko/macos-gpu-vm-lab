@@ -48,5 +48,4 @@ synchronisation. Each milestone ships on its own value (M0 and M1 guides are use
 
 ## Legal
 
-No Apple binaries or firmware in the repo. Personal research use. Upstream licences are respected: NullMoth's driver is
-referenced and studied for ideas only, not copied.
+No Apple binaries or firmware in the repo. Personal research use. Repo licence: PolyForm Noncommercial 1.0.0. Upstream notices are kept in NOTICE when code is reused.

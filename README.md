@@ -14,7 +14,8 @@ See [docs/PLAN.md](docs/PLAN.md) for architecture and milestones (M0 to M7).
 ## Rules of this repo
 
 - No Apple binaries, installers, recovery images or firmware are ever committed. Users fetch macOS themselves.
-- No code is copied from NullMoth's driver (PolyForm Noncommercial). It is referenced by link only.
+- Licence: PolyForm Noncommercial 1.0.0 (personal, research, educational use). This allows reusing code from NullMoth's
+  noncommercial driver as long as its Required Notice is kept (see NOTICE); its LGPL translator stays LGPL.
 - Scripts here are read-only unless their name says otherwise; nothing changes your host config without an explicit step.
 - Apple's EULA restricts running macOS on non-Apple hardware. Personal research use only; you are responsible for your use.
 
