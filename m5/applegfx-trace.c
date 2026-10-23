@@ -411,7 +411,7 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
             uint32_t stamp;
             if (pci_dma_read(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x15c,
                              &stamp, 4) == MEMTX_OK) {
-                s->stamp_val = stamp + 1;
+                s->stamp_val = stamp + 8;
                 uint32_t nv = s->stamp_val;
                 pci_dma_write(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x15c,
                               &nv, 4);
