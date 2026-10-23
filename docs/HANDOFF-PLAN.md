@@ -37,17 +37,31 @@ hypothesis -> one experiment cycle (~6 min) -> record result -> next.
 
 ## Phases (each has a pass check; do them in order)
 
-### P1. Learn the reply format and get the driver past init
-- Find the reply parser in the driver: setupInterrupts handler, the code that reads the second FIFO (reg +0x1c), and
-  processSegmentKernelCommand. Regenerate disassembly: `cd ~/vm/m5-re && python3 ~/macos-gpu-vm-lab/m5/re/carve.py && objdump -D -b binary -mi386:x86-64 -Mintel --adjust-vma=$(cat pvg_text.addr) pvg_text.bin > pvg.asm`.
-  Useful anchors: strings `written: %d read: %d`, `fifoOffset % 4`, `length < fifoCmdLength`, `cmdOffset < header->length`.
-- In the stub: on each doorbell, advance the read pointer (+0xc) to the write pointer, write a reply into fifoB, raise MSI (`msi_notify`), log whether MSI is enabled (`msi_enabled`).
-- PASS: driver sends a message with seq > 7, or touches a register not seen before.
+### P1. Learn the reply format and get the driver past init — DONE (M5e..M6v, 2026-10-23)
+- Reply path decoded: the driver's reader (AppleParavirtVirtualChannel read, 0x148a9e56) is PULL-based: it
+  copies `iov.len*4` RAW bytes from the fifoA ring (whole 64KB page, segdesc+0x10 = fifoA PFN) at the consumer
+  cursor, spinning on the producer cursor (segdesc+4, device-owned). Reply cursor register = BAR0+0x100c
+  (device->driver); doorbell register +0x1008 = driver->driver cursor. Reply content consumed silently; the
+  replies stay in the ring (no clearing).
+- Reg semantics (final for now): +0x1004 len 0x10000; +0x1008 doorbell (end-offset of driver cmds, cmd area =
+  fifoA+0x1000); +0x100c reply cursor (device-owned); +0x1010 0x1000 (cmd area base); +0x101c fifoB PFN (root
+  shared block, +0x400 = array of 5 channel segdescs, 20B each {.., idx@+0xc, ptab-pfn@+0x10}); +0x1030 fifoA
+  PFN; +0x102c FAULT flag (bit0 = fault -> handleFaultInterrupt PANICS, never set); +0x1014/+0x1018 masks.
+- op->reply-length map: op 0x38 {1,0,4,pfn} -> 16B; op 0x33 {0,1,0x100000} -> 4B; op 0x30 {n} -> n*4B;
+  op 0x3a {45,0x200,pfn} -> 512B (reply len = payload[1]) — pfn (payload[2]) = device-time page the device
+  must fill with clock data (qword0 = virtual ns; [ch+0x270]/[ch+0x274] = timebase used at 0x1489d7d9).
+- OUTCOME: kext AppleParavirtGPU 15.0.0 LOADS, AppleParavirtGPUControl registered, AppleParavirtFramebuffer
+  matched, 4 VirtualChannels + RootChannel + PageTable + ResourceHeap + Task + EventMachine alive, Metal plugin
+  configured (AppleParavirtGPUMetal / AppleParavirtDevice). GPUControl stays busy=1 spinning; Accelerator
+  !registered — the handshake reply CONTENT (not length) is still wrong/unknown.
 
-### P2. Make the driver finish initialisation
-- Keep answering each message; build a table opcode -> reply; log unknown opcodes with full payload.
-- PASS: in the guest, `ioreg -l | grep -i AppleParavirt` shows the accelerator/framebuffer nodes, and
-  `system_profiler SPDisplaysDataType` lists a second GPU (even with Metal "unsupported" at first).
+### P2. Make the driver finish initialisation (current phase)
+- GPUControl busy=1 accumulates: it is polling/spinning on something the device must provide. Candidate:
+  reply CONTENT of the setup msgs (op 0x38 handshake reply 16B and op 0x3a time struct) or an event the
+  device must keep asserting (masks +0x14/+0x18 read back once; fault +0x102c stays 0).
+- SegmentedCommand (u16 op @+0, size @+4) = driver-side command struct (0x1489fc5e); the fifoA wire msg is
+  built elsewhere — find the builder to learn expected reply fields.
+- PASS: AppleParavirtAccelerator becomes `registered` in ioreg, GPUControl busy settles to 0.
 - If WindowServer panics or the desktop goes black: that is a result, record it, revert the change.
 
 ### P3. Display and memory services (mirror QEMU apple-gfx contract)
