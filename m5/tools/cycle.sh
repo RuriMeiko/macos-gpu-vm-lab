@@ -17,15 +17,16 @@ ninja -C "$Q/build" qemu-system-x86_64 2>&1 | grep -E 'error|FAILED' && { echo "
 echo "[2/5] graceful shutdown"
 if OURS; then
   SSHG 'echo vm123456 | sudo -S shutdown -h now' >/dev/null 2>&1
-  for i in $(seq 1 100); do OURS || break; sleep 3; done
-  OURS && { echo "ABORT: guest did not power off in 300s (do NOT kill; inspect screenshot via tools/qmon.py)"; exit 2; }
+  for i in $(seq 1 200); do OURS || break; sleep 3; done
+  OURS && { echo "ABORT: guest did not power off in 600s (do NOT kill; inspect screenshot via tools/qmon.py)"; exit 2; }
 fi
 
 echo "[3/5] swap binary"; cp "$Q/build/qemu-system-x86_64" "$M1/qemu-system-x86_64-m5a" || exit 1
 [ -f "$M1/applegfx-trace.log" ] && mv "$M1/applegfx-trace.log" "$M1/applegfx-trace.prev.log"
 rm -f /tmp/m1-mon.sock
 
-echo "[4/5] boot"; (cd "$M1" && nohup ./boot-tahoe-m5a.sh >qemu-m5a.log 2>&1 &)
+echo "[4/5] boot"; cd "$M1" && setsid nohup ./boot-tahoe-m5a.sh >qemu-m5a.log 2>&1 </dev/null &
+sleep 1; cd "$HERE" || exit 1   # qemu is detached (own session), the script must not wait on it
 sleep 45; OURS || { echo "ABORT: qemu failed to start"; tail -5 "$M1/qemu-m5a.log"; exit 1; }
 python3 "$TOOLS/qmon.py" "sendkey right"; sleep 2; python3 "$TOOLS/qmon.py" "sendkey right"; sleep 2; python3 "$TOOLS/qmon.py" "sendkey ret"
 
@@ -35,3 +36,5 @@ SSHG true 2>/dev/null || { python3 "$TOOLS/qmon.py" "screendump /tmp/cycle-fail.
 sleep 15
 echo "--- trace: $(grep -cE '^[0-9]+ t=' "$M1/applegfx-trace.log") MMIO accesses; DMAFAIL=$(grep -c DMAFAIL "$M1/applegfx-trace.log")"
 python3 "$TOOLS/decode_fifo.py" "$M1/applegfx-trace.log" 2>&1 | head -30
+echo "=== CYCLE DONE ==="
+exit 0

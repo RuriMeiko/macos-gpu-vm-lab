@@ -19,7 +19,7 @@ hypothesis -> one experiment cycle (~6 min) -> record result -> next.
 | VM dir | ~/vm/m1 (boot script boot-tahoe-m5a.sh, overlay disk m5a.qcow2 -> backing mac_hdd.qcow2) |
 | QEMU 10.2.1 source/build | ~/vm/qemu-10.2.1 (symlink /tmp/qemu-10.2.1 is needed by the build tree) |
 | stub device source | m5/applegfx-trace.c (copied into the QEMU tree by m5/build.sh) |
-| experiment cycle | m5/tools/cycle.sh (build, graceful shutdown, boot, wait SSH, decode) |
+| experiment cycle | m5/tools/cycle.sh (build, graceful shutdown, boot, wait SSH, decode). Prints `=== CYCLE DONE ===` or `ABORT: ...`; wait for that marker, not for the process to exit (it was seen to linger) |
 | monitor / screenshots | m5/tools/qmon.py ("screendump f.ppm", "sendkey ret", ...) via /tmp/m1-mon.sock |
 | trace log | ~/vm/m1/applegfx-trace.log (previous run: applegfx-trace.prev.log) |
 | guest SSH | sshpass -p vm123456 ssh -p 2223 long@127.0.0.1 (sudo needs the same password) |

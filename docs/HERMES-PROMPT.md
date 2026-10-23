@@ -11,7 +11,11 @@ BƯỚC ĐẦU (bắt buộc, trước khi làm gì khác):
 
 VÒNG LẶP (lặp lại, không hỏi tôi chọn hướng):
  a. Chọn thí nghiệm tiếp theo nhỏ nhất, đổi ĐÚNG MỘT biến, nêu giả thuyết trong 1 dòng.
- b. Sửa m5/applegfx-trace.c (hoặc công cụ), chạy `m5/tools/cycle.sh` (build -> tắt guest êm -> boot -> thu trace).
+ b. Sửa m5/applegfx-trace.c (hoặc công cụ), rồi chạy MỘT vòng thử:
+    `cd ~/macos-gpu-vm-lab && (setsid m5/tools/cycle.sh > /tmp/cycle.out 2>&1 < /dev/null &)`
+    và CHỜ đến khi `grep -qE 'CYCLE DONE|ABORT' /tmp/cycle.out` (mất 3-12 phút; tắt guest có thể chậm tới 10 phút).
+    ĐỪNG chờ tiến trình cycle.sh tự thoát (từng thấy nó treo vì QEMU là tiến trình con), chỉ chờ dòng đánh dấu.
+    Khi tìm tiến trình bằng pgrep -f, viết dạng `[c]ycle.sh` để không khớp nhầm chính lệnh của bạn rồi tự giết mình.
  c. Đọc kết quả (`m5/tools/decode_fifo.py`, trace log, ảnh chụp màn hình qua m5/tools/qmon.py nếu cần).
  d. Ghi 1 dòng vào docs/M5-LOG.md (giả thuyết, thay đổi, kết quả), commit và push (`git push origin main`).
  e. Đi tiếp phase hiện tại. Khi đạt PASS của phase thì sang phase kế, cập nhật HANDOFF-PLAN.md.
