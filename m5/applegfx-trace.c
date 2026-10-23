@@ -417,6 +417,16 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         }
         if (s->n_stamps) {
             fprintf(s->log, "reply: blanket bump %d stamp pages\n", s->n_stamps);
+            /* M7cf: dump page of channel-2 stamp (stamps[4] driver waits on) */
+            for (int p = 0; p < s->n_stamps; p++) {
+                uint32_t hdr8[8];
+                if (pci_dma_read(PCI_DEVICE(s), (uint64_t)s->stamp_pfn[p] << 12,
+                                 hdr8, sizeof(hdr8)) == MEMTX_OK) {
+                    fprintf(s->log, "  page%d 0x%x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+                            p, s->stamp_pfn[p], hdr8[0], hdr8[1], hdr8[2], hdr8[3],
+                            hdr8[4], hdr8[5], hdr8[6], hdr8[7]);
+                }
+            }
             fflush(s->log);
         }
         dump_guest_pages(s);
@@ -442,7 +452,7 @@ static void gfx_realize(PCIDevice *pdev, Error **errp)
         error_setg(errp, "bar0-size must be a power of two >= 0x1000");
         return;
     }
-    s->log = fopen(s->logpath ? s->logpath : "/tmp/applegfx-trace.log", "w");
+    s->log = fopen(s->logpath ? s->logpath : "/tmp/applegfx-trace.log", "a");
     if (!s->log) {
         error_setg_errno(errp, errno, "cannot open trace log");
         return;
