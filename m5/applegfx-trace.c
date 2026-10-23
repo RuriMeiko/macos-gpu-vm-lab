@@ -167,19 +167,26 @@ static void fifoB_reply(AppleGfxTrace *s)
 {
     uint32_t fifoA_pfn = reg_r32(s, REG_FIFOA);
     uint32_t fifoB_pfn = reg_r32(s, REG_FIFOB);
-    uint32_t cmdoff = reg_r32(s, REG_CMDOFF);
-    uint32_t buflen = reg_r32(s, REG_LENGTH);
     uint32_t wr = reg_r32(s, REG_WRITE);
     uint32_t rd = reg_r32(s, REG_READ);
-    if (wr == 0) {
-        wr = cmdoff;   /* driver never wrote REG_WRITE before first doorbell */
+    uint32_t buflen = reg_r32(s, REG_LENGTH);
+    /*
+     * M5f finding: doorbell value = cumulative END OFFSET of the last message
+     * written, offsets are relative to the COMMAND AREA start (0 is valid).
+     * REG +0x0c is the consumer cursor the driver reads back (we advance it).
+     * But M5f also showed wr reg holds the doorbell VALUE (0x1c/0x34/...) since
+     * the driver writes its producer cursor INTO +0x08 as the doorbell — so
+     * REG_WRITE readback == doorbell value == producer cursor. Offsets are in
+     * cmd-area space: gpa = fifoA_base + 0x1000 + cursor.
+     */
+    if (rd > buflen - 0x1000) {
+        fprintf(s->log, "reply: read ptr 0x%x out of range, ignoring\n", rd);
+        fflush(s->log);
+        return;
     }
-    if (rd == 0) {
-        rd = cmdoff;   /* consumer ptr not written yet either */
-    }
-    fprintf(s->log, "reply: doorbell state wr=0x%x rd=0x%x cmdoff=0x%x len=0x%x A=0x%x B=0x%x\n",
-            wr, rd, cmdoff, buflen, fifoA_pfn, fifoB_pfn);
-    uint32_t cmdbytes = buflen - cmdoff;
+    fprintf(s->log, "reply: doorbell state wr=0x%x rd=0x%x len=0x%x A=0x%x B=0x%x\n",
+            wr, rd, buflen, fifoA_pfn, fifoB_pfn);
+    uint32_t cmdbytes = buflen - 0x1000;
     int replies = 0;
 
     if (!fifoB_pfn || !fifoA_pfn) {
@@ -191,39 +198,42 @@ static void fifoB_reply(AppleGfxTrace *s)
 
     uint64_t fifoA_base = (uint64_t)fifoA_pfn << 12;
     uint64_t fifoB_base = (uint64_t)fifoB_pfn << 12;
-    uint32_t seg_desc_pa = fifoB_base + 0x400;   /* root channel (id=1) */
-    uint32_t prod, cons;
-
-    if (pci_dma_read(PCI_DEVICE(s), seg_desc_pa + 4, &prod, 4) != MEMTX_OK ||
-        pci_dma_read(PCI_DEVICE(s), seg_desc_pa, &cons, 4) != MEMTX_OK) {
+    /*
+     * M5h decode (channel init 0x148a9b9b): the fifoB PFN page holds the
+     * SEGMENT DESCRIPTOR (16 bytes), not a ring:
+     *   +0x00 u32 producer (device-owned)
+     *   +0x04 u32 consumer (driver-owned)
+     *   +0x08 u32 flushid
+     *   +0x0c u16 channel id
+     *   +0x10 u32 PFN of the actual ring buffer (device reads it from here!)
+     * Replies must go into the RING whose PFN is at desc+0x10.
+     */
+    uint32_t seg_desc_pa = fifoB_base;
+    uint32_t desc[5];
+    if (pci_dma_read(PCI_DEVICE(s), seg_desc_pa, desc, sizeof(desc)) != MEMTX_OK) {
         fprintf(s->log, "reply: DMAFAIL reading segment descriptor\n");
         fflush(s->log);
         return;
     }
+    uint32_t prod = desc[0], cons = desc[1], ring_pfn = desc[4];
+    fprintf(s->log, "reply: desc prod=0x%x cons=0x%x flushid=0x%x id=%u ring_pfn=0x%x\n",
+            prod, cons, desc[2], desc[3] & 0xffff, ring_pfn);
+    fflush(s->log);
 
-    /* consume every complete message in fifoA between rd and wr (wrap-safe) */
+    /* consume every complete message in fifoA between rd and wr (wrap-safe);
+     * cursors are offsets in the COMMAND AREA (base = fifoA_base + 0x1000) */
+    uint32_t cmd_base = fifoA_base + 0x1000;
     while (rd != wr && replies < 8) {
-        uint32_t off = rd - cmdoff;              /* offset inside cmd area */
         uint32_t hdr[3];
         uint8_t msg[256];
         uint32_t len;
-        uint64_t fifoA_gpa = fifoA_base + rd;
+        uint64_t fifoA_gpa = cmd_base + rd;
 
-        if (rd < cmdoff || rd >= buflen) {
-            if (rd == 0) {
-                /* driver never wrote REG_READ; consumer starts at cmdoff */
-                rd = cmdoff;
-            } else {
-                fprintf(s->log, "reply: read ptr 0x%x out of range, resync\n", rd);
-                rd = cmdoff;
-                break;
-            }
-        }
-        uint32_t chunk = MIN(12, cmdbytes - off);
+        uint32_t chunk = MIN(12, cmdbytes - rd);
         if (pci_dma_read(PCI_DEVICE(s), fifoA_gpa, hdr, chunk) != MEMTX_OK ||
-            (chunk < 12 && pci_dma_read(PCI_DEVICE(s), fifoA_base + cmdoff,
+            (chunk < 12 && pci_dma_read(PCI_DEVICE(s), cmd_base,
                                         (uint8_t *)hdr + chunk, 12 - chunk) != MEMTX_OK)) {
-            fprintf(s->log, "reply: DMAFAIL reading fifoA hdr at 0x%x\n", rd);
+            fprintf(s->log, "reply: DMAFAIL reading fifoA hdr at cursor 0x%x\n", rd);
             break;
         }
         len = hdr[1];
@@ -239,54 +249,77 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint32_t seq = hdr[2];
         uint32_t op = hdr[0];
 
-        /* APV segment reply: magic + 1 chunk of 12 bytes {id, timestamp} */
-        uint32_t ring_size = buflen - 0x1000;    /* ring data area size */
+        /*
+         * M5h: APV segment reply, 28 bytes: [u32 0x10000][u32 count=1]
+         * [u32 chunkLen=12][u32 flags=0][u32 id][u64 timestamp]
+         * written into the RING (PFN from desc+0x10) at the producer cursor,
+         * then the producer (desc+0x00) is advanced.
+         */
+        uint32_t ring_size = 0x10000;
         uint32_t space = (prod >= cons) ? (ring_size - (prod - cons))
                                         : (cons - prod);
-        uint32_t seglen = 12 + 8 + 12;           /* hdr(0x10000,0,count) + {len,flags} + 12B data */
+        uint32_t seglen = 28;
+        if (!ring_pfn) {
+            fprintf(s->log, "reply: ring PFN is 0, cannot reply (seq %u)\n", seq);
+            break;
+        }
         if (space < seglen + 4) {
-            fprintf(s->log, "reply: fifoB ring full (prod=0x%x cons=0x%x)\n", prod, cons);
+            fprintf(s->log, "reply: ring full (prod=0x%x cons=0x%x)\n", prod, cons);
             break;
         }
         uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-        uint32_t seg[7] = {
-            0x10000, 0, 1,        /* magic, ?, chunkCount */
-            12, 0,                /* chunk: len=12, flags=0 */
-            seq, (uint32_t)ts,    /* data: {u32 id, u64 ts} (12 bytes) */
-        };
-        uint8_t segbuf[32];
-        memcpy(segbuf, seg, sizeof(seg));
-        memcpy(segbuf + 28, &ts, 4);             /* high 32 bits of timestamp */
-        bool ok = ring_write(s, fifoB_base + 0x1000, ring_size,
-                             prod % ring_size, segbuf, sizeof(segbuf));
+        uint8_t segbuf[28];
+        uint32_t segw[3] = { 0x10000, 1, 12 };
+        uint32_t flags = 0;
+        uint32_t ts_lo = (uint32_t)ts;
+        uint32_t ts_hi = (uint32_t)(ts >> 32);
+        memcpy(segbuf + 0, segw, 12);            /* magic, count, chunkLen */
+        memcpy(segbuf + 12, &flags, 4);          /* flags */
+        memcpy(segbuf + 16, &seq, 4);            /* id */
+        memcpy(segbuf + 20, &ts_lo, 4);
+        memcpy(segbuf + 24, &ts_hi, 4);
+        bool ok = ring_write(s, (uint64_t)ring_pfn << 12, ring_size,
+                             prod % ring_size, segbuf, seglen);
         if (!ok) {
-            fprintf(s->log, "reply: DMAFAIL writing fifoB segment (seq %u)\n", seq);
+            fprintf(s->log, "reply: DMAFAIL writing ring segment (seq %u)\n", seq);
             break;
         }
-        uint32_t nprod = prod + sizeof(segbuf);
-        pci_dma_write(PCI_DEVICE(s), seg_desc_pa + 4, &nprod, 4);
+        uint32_t nprod = prod + seglen;
+        pci_dma_write(PCI_DEVICE(s), seg_desc_pa, &nprod, 4);
         fprintf(s->log,
-                "reply: req op=0x%x len=%u seq=%u -> fifoB seg prod 0x%x->0x%x (cons=0x%x)\n",
-                op, len, seq, prod, nprod, cons);
+                "reply: req op=0x%x len=%u seq=%u -> ring(pfn 0x%x) prod 0x%x->0x%x (cons=0x%x)\n",
+                op, len, seq, ring_pfn, prod, nprod, cons);
         s->repl_seq = seq;
         replies++;
 
         /* advance the fifoA read ptr by one message */
         uint32_t nrd = rd + len;
-        if (nrd >= buflen) {
-            nrd = cmdoff + (nrd - buflen);
+        if (nrd >= cmdbytes) {
+            nrd = nrd - cmdbytes;
         }
         rd = nrd;
         reg_w32(s, REG_READ, rd);
     }
     fflush(s->log);
-    if (replies && msi_enabled(PCI_DEVICE(s))) {
-        msi_notify(PCI_DEVICE(s), 0);
-        fprintf(s->log, "reply: MSI vector 0 raised (%u replies)\n", replies);
+    if (replies) {
+        /*
+         * M5g: the ISR dispatches per-channel on MMIO dispatch masks it reads
+         * at regs +0x14 (event mask) and +0x18 (MSI dispatch mask), bit per
+         * channel (root = bit0). In M5f both were 0 so the ISR ran but never
+         * dispatched the reader. Set both masks before the MSI.
+         */
+        reg_w32(s, REG_BASE + 0x14, 0x1);
+        reg_w32(s, REG_BASE + 0x18, 0x1);
+        fprintf(s->log, "reply: dispatch masks +0x14=1 +0x18=1 set\n");
         fflush(s->log);
-    } else if (replies) {
-        fprintf(s->log, "reply: MSI NOT enabled, %u replies written silently\n", replies);
-        fflush(s->log);
+        if (msi_enabled(PCI_DEVICE(s))) {
+            msi_notify(PCI_DEVICE(s), 0);
+            fprintf(s->log, "reply: MSI vector 0 raised (%u replies)\n", replies);
+            fflush(s->log);
+        } else {
+            fprintf(s->log, "reply: MSI NOT enabled, %u replies written silently\n", replies);
+            fflush(s->log);
+        }
     }
 }
 
