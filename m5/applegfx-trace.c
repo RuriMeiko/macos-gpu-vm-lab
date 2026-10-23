@@ -315,10 +315,12 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint8_t segbuf[0x400];
         memset(segbuf, 0, sizeof(segbuf));
         /*
-         * M7bm: reply = kIOReturnSuccess = 0 — IOReturn 0 = SUCCESS,
-         * không phải 1 (M6r/M7b thử 1 không tác động).
+         * M7bq: reply dword0 = 0x40 — kiểm chứng 'gpu_stamp = reply dword0'
+         * (gpu_stamp=1 với reply 1, =0 với reply 0; waitForStamp chờ giá trị
+         * 0x11=17+ → reply dword0 lớn có thể thỏa luôn).
          */
-        memset(segbuf, 0, sizeof(segbuf));
+        ((uint32_t *)segbuf)[0] = 0x40;
+        memset(((uint32_t *)segbuf) + 1, 0, sizeof(segbuf) - 4);
         bool ok = ring_write(s, fifoA_base, ring_size, prod, segbuf, seglen);
         if (!ok) {
             fprintf(s->log, "reply: DMAFAIL writing fifoA segment (seq %u)\n", seq);
