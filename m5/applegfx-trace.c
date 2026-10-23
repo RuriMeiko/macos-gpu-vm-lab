@@ -258,7 +258,7 @@ static void fifoB_reply(AppleGfxTrace *s)
             }
         }
         if (op == 0x3a && hdr[1] >= 24) {
-            uint32_t cand = ((uint32_t *)msg)[6];
+            uint32_t cand = ((uint32_t *)msg)[5];   /* payload[2] = pfn (M6v) */
             /*
              * M6u: op3a = device-time op. Driver cấp trang (pfn) — device
              * phải điền clock data vào đó. Điền: qword0 = virtual ns,
