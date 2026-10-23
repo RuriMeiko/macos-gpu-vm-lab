@@ -237,46 +237,20 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint32_t op = hdr[0];
 
         /*
-         * M5k: per-message slot trong root block có STRIDE 0x14 (20 byte),
-         * seq nằm ở +0xc, PFN descriptor ở +0x10 (quan sát M5i:
-         * seq1@+0x40c/pfn@+0x410, seq2@+0x420/+0x424, ...).
+         * M5m: per-message slot {idx@+0xc, ptab_pfn@+0x10} (stride 0x14) là
+         * IOMMU page-table bookkeeping — KHÔNG phải reply channel. Reply
+         * quay về CÙNG fifoA ring: device ghi segment tại cursor producer
+         * (mirror+0x8), rồi MMIO-write reg +0x8 = producer mới (device-owned
+         * producer cursor), set masks + MSI. Driver ISR sẽ đọc reg +0x8,
+         * update segdesc producer và chạy reader.
          */
-        uint32_t slot_pa = fifoB_base + 0x400 + (seq - 1) * 0x14;
-        uint32_t slotw[5];
-        if (pci_dma_read(PCI_DEVICE(s), slot_pa, slotw, sizeof(slotw)) != MEMTX_OK) {
-            fprintf(s->log, "reply: DMAFAIL reading root slot %u\n", seq);
-            break;
-        }
-        uint32_t slot_idx = slotw[3];      /* +0x0c */
-        uint32_t slot_pfn = slotw[4];      /* +0x10 */
-        if (slot_idx != seq || !slot_pfn) {
-            fprintf(s->log, "reply: slot %u mismatch (idx=%u pfn=0x%x), stop\n",
-                    seq, slot_idx, slot_pfn);
-            break;
-        }
-        uint64_t desc_pa = (uint64_t)slot_pfn << 12;
-        uint32_t desc[5];
-        if (pci_dma_read(PCI_DEVICE(s), desc_pa, desc, sizeof(desc)) != MEMTX_OK) {
-            fprintf(s->log, "reply: DMAFAIL reading desc page pfn 0x%x\n", slot_pfn);
-            break;
-        }
-        cons = desc[0];
-        prod = desc[1];
-        ring_pfn = desc[4];
-        fprintf(s->log,
-                "reply: msg seq=%u op=0x%x desc(pfn 0x%x) cons=0x%x prod=0x%x id=%u ring_pfn=0x%x\n",
-                seq, op, slot_pfn, cons, prod, desc[3] & 0xffff, ring_pfn);
-
-        uint32_t ring_size = 0x10000;
+        uint32_t prod = wr;              /* device producer cursor = last doorbell */
+        uint32_t ring_size = cmdbytes;   /* fifoA cmd area size (0xf000) */
         uint32_t seglen = 28;
-        if (!ring_pfn) {
-            fprintf(s->log, "reply: ring PFN is 0, cannot reply (seq %u)\n", seq);
-            break;
-        }
-        uint32_t space = (prod >= cons) ? (ring_size - (prod - cons))
-                                        : (cons - prod);
+        uint32_t space = (prod >= rd) ? (ring_size - (prod - rd))
+                                      : (rd - prod);
         if (space < seglen + 4) {
-            fprintf(s->log, "reply: ring full (prod=0x%x cons=0x%x)\n", prod, cons);
+            fprintf(s->log, "reply: fifoA ring full (prod=0x%x rd=0x%x)\n", prod, rd);
             break;
         }
         uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -290,17 +264,16 @@ static void fifoB_reply(AppleGfxTrace *s)
         memcpy(segbuf + 16, &seq, 4);            /* id */
         memcpy(segbuf + 20, &ts_lo, 4);
         memcpy(segbuf + 24, &ts_hi, 4);
-        bool ok = ring_write(s, (uint64_t)ring_pfn << 12, ring_size,
-                             prod % ring_size, segbuf, seglen);
+        bool ok = ring_write(s, cmd_base, ring_size, prod, segbuf, seglen);
         if (!ok) {
-            fprintf(s->log, "reply: DMAFAIL writing ring segment (seq %u)\n", seq);
+            fprintf(s->log, "reply: DMAFAIL writing fifoA segment (seq %u)\n", seq);
             break;
         }
         uint32_t nprod = prod + seglen;
-        pci_dma_write(PCI_DEVICE(s), desc_pa + 4, &nprod, 4);
+        reg_w32(s, REG_WRITE, nprod);            /* device-owned producer cursor */
         fprintf(s->log,
-                "reply: posted seq=%u -> ring(pfn 0x%x) prod 0x%x->0x%x\n",
-                seq, ring_pfn, prod, nprod);
+                "reply: posted seq=%u -> fifoA prod 0x%x->0x%x (rd=0x%x)\n",
+                seq, prod, nprod, rd);
         s->repl_seq = seq;
         replies++;
 
