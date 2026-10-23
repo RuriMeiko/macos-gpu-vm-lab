@@ -403,19 +403,19 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     if (addr == 0x1008) {
         s->last_db = val;
         /*
-         * M7bh: stamp addr = [em+0x20] + 4*idx (KC helper idx*4); idx 7 →
-         * offset +0x1c trong op38 page.
+         * M7bu: bump TẤT CẢ 32 stamp dwords @+0x00..0x7c (+8 mỗi doorbell)
+         * — blanket: stamps[4]/[7] cùng nhảy.
          */
         if (s->stamp_pfn) {
-            uint32_t stamp;
-            if (pci_dma_read(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x1c,
-                             &stamp, 4) == MEMTX_OK) {
-                s->stamp_val = stamp + 8;
-                uint32_t nv = s->stamp_val;
-                pci_dma_write(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x1c,
-                              &nv, 4);
-                fprintf(s->log, "reply: stamp bump @+0x1c %u -> %u\n",
-                        stamp, nv);
+            uint32_t stamps[32];
+            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)s->stamp_pfn << 12,
+                             stamps, sizeof(stamps)) == MEMTX_OK) {
+                for (int k = 0; k < 32; k++) {
+                    stamps[k] += 8;
+                }
+                pci_dma_write(PCI_DEVICE(s), (uint64_t)s->stamp_pfn << 12,
+                              stamps, sizeof(stamps));
+                fprintf(s->log, "reply: blanket stamp bump 32 dwords +8\n");
                 fflush(s->log);
             }
         }
