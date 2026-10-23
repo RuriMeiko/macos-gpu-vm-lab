@@ -291,7 +291,7 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint32_t ring_size = cmdbytes;   /* fifoA cmd area size (0xf000) */
         uint32_t seglen;
         if (op == 0x38) seglen = ((uint32_t *)msg)[5] * 4;
-        else if (op == 0x3a) seglen = ((uint32_t *)msg)[5];
+        else if (op == 0x3a) seglen = ((uint32_t *)msg)[4];   /* 0x200 = 512B */
         else if (op == 0x30) seglen = ((uint32_t *)msg)[3] * 4;
         else if (op == 0x33) seglen = ((uint32_t *)msg)[4] * 4;
         else seglen = 16;
