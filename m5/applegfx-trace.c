@@ -278,12 +278,24 @@ static void fifoB_reply(AppleGfxTrace *s)
          * update segdesc producer và chạy reader.
          */
         /*
-         * M5v: reply vào offset cursor DEVICE-OWNED (reg +0x0c hiện tại = 0
-         * lần đầu). Cursor reply riêng — KHÔNG dùng doorbell cursor.
+         * M6a: reply RAW pull-based — driver reader copy len*4 bytes RAW từ
+         * ring fifoA tại device reply cursor. Reply len theo op:
+         *   op 0x38: payload[2] (=4) dwords → 16B
+         *   op 0x3a: payload[1] (=0x200) bytes
+         *   op 0x30: payload[0] dwords
+         *   op 0x33: payload[1] dwords? (payload {0,1,0x100000}: len=1 dword?)
+         * Nội dung: zeros + seq/id — driver caller sẽ parse; assert sẽ in
+         * lên serial nếu sai.
          */
         uint32_t prod = s->reply_cur;
         uint32_t ring_size = cmdbytes;   /* fifoA cmd area size (0xf000) */
-        uint32_t seglen = 28;
+        uint32_t seglen;
+        if (op == 0x38) seglen = ((uint32_t *)msg)[5] * 4;
+        else if (op == 0x3a) seglen = ((uint32_t *)msg)[5];
+        else if (op == 0x30) seglen = ((uint32_t *)msg)[3] * 4;
+        else if (op == 0x33) seglen = ((uint32_t *)msg)[4] * 4;
+        else seglen = 16;
+        if (!seglen || seglen > 0x400) seglen = 16;
         uint32_t dcur = wr;              /* driver cmd cursor (doorbell) */
         uint32_t space = (prod >= dcur) ? (ring_size - (prod - dcur))
                                         : (dcur - prod);
@@ -292,16 +304,9 @@ static void fifoB_reply(AppleGfxTrace *s)
             break;
         }
         uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-        uint8_t segbuf[28];
-        uint32_t segw[3] = { 0x10000, 1, 12 };
-        uint32_t flags = 0;
-        uint32_t ts_lo = (uint32_t)ts;
-        uint32_t ts_hi = (uint32_t)(ts >> 32);
-        memcpy(segbuf + 0, segw, 12);            /* magic, count, chunkLen */
-        memcpy(segbuf + 12, &flags, 4);          /* flags */
-        memcpy(segbuf + 16, &seq, 4);            /* id */
-        memcpy(segbuf + 20, &ts_lo, 4);
-        memcpy(segbuf + 24, &ts_hi, 4);
+        uint8_t segbuf[0x400];
+        memset(segbuf, 0, sizeof(segbuf));
+        ((uint32_t *)segbuf)[0] = seq;           /* id đầu reply */
         bool ok = ring_write(s, cmd_base, ring_size, prod, segbuf, seglen);
         if (!ok) {
             fprintf(s->log, "reply: DMAFAIL writing fifoA segment (seq %u)\n", seq);
@@ -311,8 +316,8 @@ static void fifoB_reply(AppleGfxTrace *s)
         reg_w32(s, REG_READ, nprod);     /* device reply cursor -> +0x0c */
         s->reply_cur = nprod;
         fprintf(s->log,
-                "reply: posted seq=%u -> fifoA reply 0x%x->0x%x (dcur=0x%x)\n",
-                seq, prod, nprod, dcur);
+                "reply: posted seq=%u op=0x%x len=%u -> fifoA reply 0x%x->0x%x (dcur=0x%x)\n",
+                seq, op, seglen, prod, nprod, dcur);
         s->repl_seq = seq;
         replies++;
 
