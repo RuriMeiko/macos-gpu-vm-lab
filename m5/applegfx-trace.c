@@ -306,7 +306,9 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         uint8_t segbuf[0x400];
         memset(segbuf, 0, sizeof(segbuf));
-        ((uint32_t *)segbuf)[0] = seq;           /* id đầu reply */
+        /* M6r: reply content — dword0 = status. Thử status=1 (success). */
+        ((uint32_t *)segbuf)[0] = 1;
+        ((uint32_t *)segbuf)[1] = seq;
         bool ok = ring_write(s, fifoA_base, ring_size, prod, segbuf, seglen);
         if (!ok) {
             fprintf(s->log, "reply: DMAFAIL writing fifoA segment (seq %u)\n", seq);
