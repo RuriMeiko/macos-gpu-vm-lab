@@ -404,18 +404,18 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     if (addr == 0x1008) {
         s->last_db = val;
         /*
-         * M7ah: sau mỗi doorbell (driver submit work), tăng stamp dword
-         * @stamp_page+0x140 để EventMachine thấy progress (gpu_stamp tăng).
+         * M7ak: 'stamp 7' = index 7 trong mảng stamps bắt đầu @+0x140 →
+         * dword @+0x15c. Tăng mỗi doorbell.
          */
         if (s->stamp_pfn) {
             uint32_t stamp;
-            if (pci_dma_read(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x140,
+            if (pci_dma_read(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x15c,
                              &stamp, 4) == MEMTX_OK) {
                 s->stamp_val = stamp + 1;
                 uint32_t nv = s->stamp_val;
-                pci_dma_write(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x140,
+                pci_dma_write(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x15c,
                               &nv, 4);
-                fprintf(s->log, "reply: stamp bump @+0x140 %u -> %u\n",
+                fprintf(s->log, "reply: stamp bump @+0x15c %u -> %u\n",
                         stamp, nv);
                 fflush(s->log);
             }
