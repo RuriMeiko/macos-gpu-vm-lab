@@ -199,48 +199,13 @@ static void fifoB_reply(AppleGfxTrace *s)
     uint64_t fifoA_base = (uint64_t)fifoA_pfn << 12;
     uint64_t fifoB_base = (uint64_t)fifoB_pfn << 12;
     /*
-     * M5h decode (channel init 0x148a9b9b): the fifoB PFN page holds the
-     * SEGMENT DESCRIPTOR (16 bytes), not a ring:
-     *   +0x00 u32 producer (device-owned)
-     *   +0x04 u32 consumer (driver-owned)
-     *   +0x08 u32 flushid
-     *   +0x0c u16 channel id
-     *   +0x10 u32 PFN of the actual ring buffer (device reads it from here!)
-     * Replies must go into the RING whose PFN is at desc+0x10.
+     * M5i decode: root shared block +0x400 = array of {u32 seq, u32 PFN}
+     * — one per driver message. The per-message PAGE is the segment
+     * descriptor (M5h decode at 0x148a9b9b):
+     *   +0x00 consumer (driver), +0x04 producer (device), +0x08 flushid,
+     *   +0x0c u16 id, +0x10 ring PFN (device writes reply segments here).
      */
-    uint32_t seg_desc_pa = fifoB_base;
-    uint32_t desc[5];
-    if (pci_dma_read(PCI_DEVICE(s), seg_desc_pa, desc, sizeof(desc)) != MEMTX_OK) {
-        fprintf(s->log, "reply: DMAFAIL reading segment descriptor\n");
-        fflush(s->log);
-        return;
-    }
-    uint32_t prod = desc[0], cons = desc[1], ring_pfn = desc[4];
-    fprintf(s->log, "reply: desc prod=0x%x cons=0x%x flushid=0x%x id=%u ring_pfn=0x%x\n",
-            prod, cons, desc[2], desc[3] & 0xffff, ring_pfn);
-    /*
-     * M5i: dump the FULL root shared block (0x890 bytes, setupRoot alloc size)
-     * so we can see every field incl. the real descriptor & ring PFN.
-     */
-    {
-        uint8_t blk[0x890];
-        if (pci_dma_read(PCI_DEVICE(s), fifoB_base, blk, sizeof(blk)) == MEMTX_OK) {
-            fprintf(s->log, "reply: root block dump (0x890 bytes):");
-            int nz = 0;
-            for (int i = 0; i < 0x890; i++) if (blk[i]) nz++;
-            fprintf(s->log, " nonzero=%d\n", nz);
-            for (int off = 0; off < 0x890; off += 16) {
-                const uint8_t *r = blk + off;
-                bool any = false;
-                for (int k = 0; k < 16; k++) if (r[k]) { any = true; break; }
-                if (!any) continue;
-                fprintf(s->log, "  +%03x:", off);
-                for (int k = 0; k < 16; k++) fprintf(s->log, " %02x", r[k]);
-                fputc('\n', s->log);
-            }
-        }
-    }
-    fflush(s->log);
+    uint32_t prod = 0, cons = 0, ring_pfn = 0;
 
     /* consume every complete message in fifoA between rd and wr (wrap-safe);
      * cursors are offsets in the COMMAND AREA (base = fifoA_base + 0x1000) */
@@ -272,19 +237,44 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint32_t op = hdr[0];
 
         /*
-         * M5h: APV segment reply, 28 bytes: [u32 0x10000][u32 count=1]
-         * [u32 chunkLen=12][u32 flags=0][u32 id][u64 timestamp]
-         * written into the RING (PFN from desc+0x10) at the producer cursor,
-         * then the producer (desc+0x00) is advanced.
+         * M5k: per-message slot trong root block có STRIDE 0x14 (20 byte),
+         * seq nằm ở +0xc, PFN descriptor ở +0x10 (quan sát M5i:
+         * seq1@+0x40c/pfn@+0x410, seq2@+0x420/+0x424, ...).
          */
+        uint32_t slot_pa = fifoB_base + 0x400 + (seq - 1) * 0x14;
+        uint32_t slotw[5];
+        if (pci_dma_read(PCI_DEVICE(s), slot_pa, slotw, sizeof(slotw)) != MEMTX_OK) {
+            fprintf(s->log, "reply: DMAFAIL reading root slot %u\n", seq);
+            break;
+        }
+        uint32_t slot_idx = slotw[3];      /* +0x0c */
+        uint32_t slot_pfn = slotw[4];      /* +0x10 */
+        if (slot_idx != seq || !slot_pfn) {
+            fprintf(s->log, "reply: slot %u mismatch (idx=%u pfn=0x%x), stop\n",
+                    seq, slot_idx, slot_pfn);
+            break;
+        }
+        uint64_t desc_pa = (uint64_t)slot_pfn << 12;
+        uint32_t desc[5];
+        if (pci_dma_read(PCI_DEVICE(s), desc_pa, desc, sizeof(desc)) != MEMTX_OK) {
+            fprintf(s->log, "reply: DMAFAIL reading desc page pfn 0x%x\n", slot_pfn);
+            break;
+        }
+        cons = desc[0];
+        prod = desc[1];
+        ring_pfn = desc[4];
+        fprintf(s->log,
+                "reply: msg seq=%u op=0x%x desc(pfn 0x%x) cons=0x%x prod=0x%x id=%u ring_pfn=0x%x\n",
+                seq, op, slot_pfn, cons, prod, desc[3] & 0xffff, ring_pfn);
+
         uint32_t ring_size = 0x10000;
-        uint32_t space = (prod >= cons) ? (ring_size - (prod - cons))
-                                        : (cons - prod);
         uint32_t seglen = 28;
         if (!ring_pfn) {
             fprintf(s->log, "reply: ring PFN is 0, cannot reply (seq %u)\n", seq);
             break;
         }
+        uint32_t space = (prod >= cons) ? (ring_size - (prod - cons))
+                                        : (cons - prod);
         if (space < seglen + 4) {
             fprintf(s->log, "reply: ring full (prod=0x%x cons=0x%x)\n", prod, cons);
             break;
@@ -307,10 +297,10 @@ static void fifoB_reply(AppleGfxTrace *s)
             break;
         }
         uint32_t nprod = prod + seglen;
-        pci_dma_write(PCI_DEVICE(s), seg_desc_pa, &nprod, 4);
+        pci_dma_write(PCI_DEVICE(s), desc_pa + 4, &nprod, 4);
         fprintf(s->log,
-                "reply: req op=0x%x len=%u seq=%u -> ring(pfn 0x%x) prod 0x%x->0x%x (cons=0x%x)\n",
-                op, len, seq, ring_pfn, prod, nprod, cons);
+                "reply: posted seq=%u -> ring(pfn 0x%x) prod 0x%x->0x%x\n",
+                seq, ring_pfn, prod, nprod);
         s->repl_seq = seq;
         replies++;
 
