@@ -339,8 +339,8 @@ static void fifoB_reply(AppleGfxTrace *s)
          */
         reg_w32(s, REG_BASE + 0x14, 0x1);
         reg_w32(s, REG_BASE + 0x18, 0x1);
-        reg_w32(s, REG_BASE + 0x2c, 0x1);  /* M5y: device interrupt status bit0 */
-        fprintf(s->log, "reply: dispatch masks +0x14=1 +0x18=1 +0x2c=1 set\n");
+        /* M6b: +0x2c bit0 = FAULT flag (panic handleFaultInterrupt) — KHÔNG set */
+        fprintf(s->log, "reply: dispatch masks +0x14=1 +0x18=1 (+0x2c untouched)\n");
         fflush(s->log);
         if (msi_enabled(PCI_DEVICE(s))) {
             msi_notify(PCI_DEVICE(s), 0);
