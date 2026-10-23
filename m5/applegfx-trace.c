@@ -22,6 +22,21 @@
 #define TYPE_APPLEGFX_TRACE "applegfx-trace"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleGfxTrace, APPLEGFX_TRACE)
 
+/* Register block (BAR0+0x1000) offsets, decoded from AppleParavirtGPU setupFIFO.
+ * The driver's MMIO trace shows accesses at BAR offsets 0x10xx, i.e. the fifo
+ * register block starts at 0x1000: reg "0x04" is BAR 0x1004, etc. */
+
+#define REG_BASE     0x1000
+
+#define REG_LENGTH   (REG_BASE + 0x04)   /* fifo buffer length (driver writes 0x10000) */
+#define REG_WRITE    (REG_BASE + 0x08)   /* driver->device write ptr (byte offset into cmd area) */
+#define REG_READ     (REG_BASE + 0x0c)   /* driver->device read ptr (we advance it) */
+#define REG_CMDOFF   (REG_BASE + 0x10)   /* command area offset inside the buffer (0x1000) */
+#define REG_FIFOB    (REG_BASE + 0x1c)   /* PFN of the device->driver ring (reply fifoB) */
+#define REG_FIFOA    (REG_BASE + 0x30)   /* PFN of the driver->device ring (commands) */
+#define HDR_WRITE    0x00   /* fifoB header: write ptr (device-owned) */
+#define HDR_READ     0x04   /* fifoB header: read ptr (driver-owned) */
+
 struct AppleGfxTrace {
     PCIDevice parent_obj;
     MemoryRegion mmio;
@@ -34,6 +49,8 @@ struct AppleGfxTrace {
     uint32_t readfill;
     uint32_t dumps;      /* doorbell dumps done so far */
     uint32_t last_db;    /* last value written to the doorbell (0x1008) */
+    bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
+    uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
 
 static void trace_line(AppleGfxTrace *s, const char *dir, hwaddr addr,
@@ -97,6 +114,182 @@ static void dump_guest_pages(AppleGfxTrace *s)
     fflush(s->log);
 }
 
+/*
+ * M5e: reply to every pending driver->device command.
+ *
+ * Decoded from AppleParavirtChannel init (0x148a9900) + reader (0x148a9ee0) +
+ * segment parser (0x148a8ac2):
+ *  - fifoB (reg +0x1c PFN, 64 KB) = root channel buffer. Page 0 = shared state,
+ *    the per-channel SEGMENT DESCRIPTOR (root id=1) sits at fifoB+0x400:
+ *      +0x00 u32 consumer ptr (driver-owned, byte offset into the ring)
+ *      +0x04 u32 producer ptr (device-owned — WE advance it)
+ *      +0x08 u32 (reply/flush id field, init 0xffffffff by driver?)
+ *  - ring data area starts at buffer+0x1000, ring size = 64KB total.
+ *  - Device->driver messages are APV "segments": [u32 0x10000 magic][u32 0]
+ *    [u32 chunkCount][chunk table: {u32 len, u32 flags}][chunk data...]
+ *  - Completion reply chunk (built by the driver at 0x148a8f52 as 12 bytes):
+ *    { u32 id (= driver-side per-message counter); u64 host time }.
+ *  - After writing the segment: advance the producer ptr and raise the MSI.
+ *    The ISR reads dispatch masks from its own mirror struct (fields filled
+ *    when the driver reads MMIO regs +0x14/+0x18 — those reads happen after
+ *    the interrupt, so we don't need to pre-fill anything).
+ */
+static uint32_t reg_r32(AppleGfxTrace *s, unsigned off)
+{
+    uint32_t v;
+    memcpy(&v, s->mem + off, 4);
+    return v;
+}
+
+static void reg_w32(AppleGfxTrace *s, unsigned off, uint32_t v)
+{
+    memcpy(s->mem + off, &v, 4);
+}
+
+/* write n bytes into a byte-ring (base=gpa of ring start, size=ring size) */
+static bool ring_write(AppleGfxTrace *s, uint64_t base, uint32_t size,
+                       uint32_t off, const void *buf, uint32_t n)
+{
+    uint32_t first = MIN(n, size - off);
+    const uint8_t *p = buf;
+
+    if (pci_dma_write(PCI_DEVICE(s), base + off, p, first) != MEMTX_OK) {
+        return false;
+    }
+    if (first < n &&
+        pci_dma_write(PCI_DEVICE(s), base, p + first, n - first) != MEMTX_OK) {
+        return false;
+    }
+    return true;
+}
+
+static void fifoB_reply(AppleGfxTrace *s)
+{
+    uint32_t fifoA_pfn = reg_r32(s, REG_FIFOA);
+    uint32_t fifoB_pfn = reg_r32(s, REG_FIFOB);
+    uint32_t cmdoff = reg_r32(s, REG_CMDOFF);
+    uint32_t buflen = reg_r32(s, REG_LENGTH);
+    uint32_t wr = reg_r32(s, REG_WRITE);
+    uint32_t rd = reg_r32(s, REG_READ);
+    if (wr == 0) {
+        wr = cmdoff;   /* driver never wrote REG_WRITE before first doorbell */
+    }
+    if (rd == 0) {
+        rd = cmdoff;   /* consumer ptr not written yet either */
+    }
+    fprintf(s->log, "reply: doorbell state wr=0x%x rd=0x%x cmdoff=0x%x len=0x%x A=0x%x B=0x%x\n",
+            wr, rd, cmdoff, buflen, fifoA_pfn, fifoB_pfn);
+    uint32_t cmdbytes = buflen - cmdoff;
+    int replies = 0;
+
+    if (!fifoB_pfn || !fifoA_pfn) {
+        fprintf(s->log, "reply: fifo PFN not set yet (A=0x%x B=0x%x)\n",
+                fifoA_pfn, fifoB_pfn);
+        fflush(s->log);
+        return;
+    }
+
+    uint64_t fifoA_base = (uint64_t)fifoA_pfn << 12;
+    uint64_t fifoB_base = (uint64_t)fifoB_pfn << 12;
+    uint32_t seg_desc_pa = fifoB_base + 0x400;   /* root channel (id=1) */
+    uint32_t prod, cons;
+
+    if (pci_dma_read(PCI_DEVICE(s), seg_desc_pa + 4, &prod, 4) != MEMTX_OK ||
+        pci_dma_read(PCI_DEVICE(s), seg_desc_pa, &cons, 4) != MEMTX_OK) {
+        fprintf(s->log, "reply: DMAFAIL reading segment descriptor\n");
+        fflush(s->log);
+        return;
+    }
+
+    /* consume every complete message in fifoA between rd and wr (wrap-safe) */
+    while (rd != wr && replies < 8) {
+        uint32_t off = rd - cmdoff;              /* offset inside cmd area */
+        uint32_t hdr[3];
+        uint8_t msg[256];
+        uint32_t len;
+        uint64_t fifoA_gpa = fifoA_base + rd;
+
+        if (rd < cmdoff || rd >= buflen) {
+            if (rd == 0) {
+                /* driver never wrote REG_READ; consumer starts at cmdoff */
+                rd = cmdoff;
+            } else {
+                fprintf(s->log, "reply: read ptr 0x%x out of range, resync\n", rd);
+                rd = cmdoff;
+                break;
+            }
+        }
+        uint32_t chunk = MIN(12, cmdbytes - off);
+        if (pci_dma_read(PCI_DEVICE(s), fifoA_gpa, hdr, chunk) != MEMTX_OK ||
+            (chunk < 12 && pci_dma_read(PCI_DEVICE(s), fifoA_base + cmdoff,
+                                        (uint8_t *)hdr + chunk, 12 - chunk) != MEMTX_OK)) {
+            fprintf(s->log, "reply: DMAFAIL reading fifoA hdr at 0x%x\n", rd);
+            break;
+        }
+        len = hdr[1];
+        if (len < 12 || len % 4 || len > sizeof(msg) || len > cmdbytes) {
+            fprintf(s->log, "reply: bad message len %u at rd=0x%x, stop\n", len, rd);
+            break;
+        }
+        if (pci_dma_read(PCI_DEVICE(s), fifoA_gpa, msg, len) != MEMTX_OK) {
+            fprintf(s->log, "reply: DMAFAIL reading fifoA msg at 0x%x\n", rd);
+            break;
+        }
+
+        uint32_t seq = hdr[2];
+        uint32_t op = hdr[0];
+
+        /* APV segment reply: magic + 1 chunk of 12 bytes {id, timestamp} */
+        uint32_t ring_size = buflen - 0x1000;    /* ring data area size */
+        uint32_t space = (prod >= cons) ? (ring_size - (prod - cons))
+                                        : (cons - prod);
+        uint32_t seglen = 12 + 8 + 12;           /* hdr(0x10000,0,count) + {len,flags} + 12B data */
+        if (space < seglen + 4) {
+            fprintf(s->log, "reply: fifoB ring full (prod=0x%x cons=0x%x)\n", prod, cons);
+            break;
+        }
+        uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        uint32_t seg[7] = {
+            0x10000, 0, 1,        /* magic, ?, chunkCount */
+            12, 0,                /* chunk: len=12, flags=0 */
+            seq, (uint32_t)ts,    /* data: {u32 id, u64 ts} (12 bytes) */
+        };
+        uint8_t segbuf[32];
+        memcpy(segbuf, seg, sizeof(seg));
+        memcpy(segbuf + 28, &ts, 4);             /* high 32 bits of timestamp */
+        bool ok = ring_write(s, fifoB_base + 0x1000, ring_size,
+                             prod % ring_size, segbuf, sizeof(segbuf));
+        if (!ok) {
+            fprintf(s->log, "reply: DMAFAIL writing fifoB segment (seq %u)\n", seq);
+            break;
+        }
+        uint32_t nprod = prod + sizeof(segbuf);
+        pci_dma_write(PCI_DEVICE(s), seg_desc_pa + 4, &nprod, 4);
+        fprintf(s->log,
+                "reply: req op=0x%x len=%u seq=%u -> fifoB seg prod 0x%x->0x%x (cons=0x%x)\n",
+                op, len, seq, prod, nprod, cons);
+        s->repl_seq = seq;
+        replies++;
+
+        /* advance the fifoA read ptr by one message */
+        uint32_t nrd = rd + len;
+        if (nrd >= buflen) {
+            nrd = cmdoff + (nrd - buflen);
+        }
+        rd = nrd;
+        reg_w32(s, REG_READ, rd);
+    }
+    fflush(s->log);
+    if (replies && msi_enabled(PCI_DEVICE(s))) {
+        msi_notify(PCI_DEVICE(s), 0);
+        fprintf(s->log, "reply: MSI vector 0 raised (%u replies)\n", replies);
+        fflush(s->log);
+    } else if (replies) {
+        fprintf(s->log, "reply: MSI NOT enabled, %u replies written silently\n", replies);
+        fflush(s->log);
+    }
+}
+
 static uint64_t gfx_mmio_read(void *opaque, hwaddr addr, unsigned size)
 {
     AppleGfxTrace *s = opaque;
@@ -124,6 +317,9 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     if (addr == 0x1008) {
         s->last_db = val;
         dump_guest_pages(s);
+        if (s->reply) {
+            fifoB_reply(s);
+        }
     }
 }
 
@@ -177,6 +373,7 @@ static const Property gfx_props[] = {
     DEFINE_PROP_STRING("log", AppleGfxTrace, logpath),
     DEFINE_PROP_UINT32("bar0-size", AppleGfxTrace, bar0_size, 0x40000),
     DEFINE_PROP_UINT32("readfill", AppleGfxTrace, readfill, 0),
+    DEFINE_PROP_BOOL("reply", AppleGfxTrace, reply, false),
 };
 
 static void gfx_class_init(ObjectClass *klass, const void *data)
