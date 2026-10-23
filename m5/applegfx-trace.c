@@ -92,7 +92,7 @@ static void dump_guest_pages(AppleGfxTrace *s)
         snprintf(tag, sizeof(tag), "%s.header", fifos[i].name);
         hexdump_guest(s, tag, (uint64_t)pfn << 12, 0x40);
         snprintf(tag, sizeof(tag), "%s.data", fifos[i].name);
-        hexdump_guest(s, tag, ((uint64_t)pfn << 12) + 0x1000, 0xa0);
+        hexdump_guest(s, tag, ((uint64_t)pfn << 12) + 0x1000, 0x200);
     }
     fflush(s->log);
 }

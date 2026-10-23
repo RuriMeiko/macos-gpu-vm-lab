@@ -1,0 +1,10 @@
+# Never commit Apple binaries or derived disassembly, disk images or VM state
+*.kc
+pvg_text.bin
+pvg.asm
+*.asm
+*.qcow2
+*.img
+*.dmg
+*.ppm
+OSX-KVM/
