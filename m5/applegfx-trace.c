@@ -50,6 +50,8 @@ struct AppleGfxTrace {
     uint32_t dumps;      /* doorbell dumps done so far */
     uint32_t last_db;    /* last value written to the doorbell (0x1008) */
     uint32_t reply_cur;  /* device reply cursor (M5v, posted into +0x0c) */
+    uint32_t time_pfn;   /* op3a device-time page (M6u) */
+    uint64_t time_last;  /* last ns written to the time page */
     bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
     uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
@@ -257,16 +259,21 @@ static void fifoB_reply(AppleGfxTrace *s)
         }
         if (op == 0x3a && hdr[1] >= 24) {
             uint32_t cand = ((uint32_t *)msg)[6];
-            uint32_t page[1024];
-            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)cand << 12, page,
-                             sizeof(page)) == MEMTX_OK) {
-                fprintf(s->log, "reply: op3a pfn 0x%x dump:", cand);
-                for (int i = 0; i < 32; i++) {
-                    if (page[i]) fprintf(s->log, " +%x=%08x", i * 4, page[i]);
-                }
-                fprintf(s->log, "\n");
-                fflush(s->log);
-            }
+            /*
+             * M6u: op3a = device-time op. Driver cấp trang (pfn) — device
+             * phải điền clock data vào đó. Điền: qword0 = virtual ns,
+             * dword2 = freq (1 GHz), dword3 = flags.
+             */
+            uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+            uint32_t tw[4] = {
+                (uint32_t)now, (uint32_t)(now >> 32), 0x3b9aca00, 0x1
+            };
+            pci_dma_write(PCI_DEVICE(s), (uint64_t)cand << 12, tw, sizeof(tw));
+            s->time_pfn = cand;
+            s->time_last = now;
+            fprintf(s->log, "reply: op3a time page pfn 0x%x filled (ns=%llu)\n",
+                    cand, (unsigned long long)now);
+            fflush(s->log);
         }
 
         /*
