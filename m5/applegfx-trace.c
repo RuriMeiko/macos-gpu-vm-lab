@@ -313,9 +313,14 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         uint8_t segbuf[0x400];
         memset(segbuf, 0, sizeof(segbuf));
-        /* M6r: reply content — dword0 = status. Thử status=1 (success). */
-        ((uint32_t *)segbuf)[0] = 1;
-        ((uint32_t *)segbuf)[1] = seq;
+        /*
+         * M7b: reply = mảng {status=1, timebase=1...} — mỗi dword = 1
+         * (identity timebase num/den cho phép tính timestamp @0x1489d7d9).
+         */
+        uint32_t nd = seglen / 4;
+        for (uint32_t k = 0; k < nd; k++) {
+            ((uint32_t *)segbuf)[k] = 1;
+        }
         bool ok = ring_write(s, fifoA_base, ring_size, prod, segbuf, seglen);
         if (!ok) {
             fprintf(s->log, "reply: DMAFAIL writing fifoA segment (seq %u)\n", seq);
