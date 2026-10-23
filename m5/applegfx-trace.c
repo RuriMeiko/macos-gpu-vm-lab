@@ -375,8 +375,18 @@ static uint64_t gfx_mmio_read(void *opaque, hwaddr addr, unsigned size)
     if (addr + size <= s->bar0_size) {
         memcpy(&val, s->mem + addr, size);   /* little-endian host/guest */
     }
-    /* M5v: +0x0c là reply cursor của device (reg_w32 đã ghi vào s->mem) —
-     * bỏ override last_db cũ (M5f) để driver đọc đúng giá trị. */
+    /*
+     * M7g: +0x14/+0x18 (event/dispatch masks) là self-clearing on read —
+     * device xóa khi driver đọc để event source hoàn tất (GPUControl busy
+     * spin = mask không bao giờ được clear).
+     */
+    if (size == 4 && (addr == REG_BASE + 0x14 || addr == REG_BASE + 0x18)) {
+        uint32_t zero = 0;
+        memcpy(s->mem + addr, &zero, 4);
+        fprintf(s->log, "reply: mask 0x%04x self-cleared (read val=%llu)\n",
+                (unsigned)addr, (unsigned long long)val);
+        fflush(s->log);
+    }
     trace_line(s, "R", addr, size, val);
     return val;
 }
