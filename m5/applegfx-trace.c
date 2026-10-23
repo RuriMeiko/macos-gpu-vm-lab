@@ -307,7 +307,7 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint8_t segbuf[0x400];
         memset(segbuf, 0, sizeof(segbuf));
         ((uint32_t *)segbuf)[0] = seq;           /* id đầu reply */
-        bool ok = ring_write(s, cmd_base, ring_size, prod, segbuf, seglen);
+        bool ok = ring_write(s, fifoA_base, ring_size, prod, segbuf, seglen);
         if (!ok) {
             fprintf(s->log, "reply: DMAFAIL writing fifoA segment (seq %u)\n", seq);
             break;
