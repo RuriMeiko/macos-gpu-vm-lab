@@ -52,8 +52,8 @@ struct AppleGfxTrace {
     uint32_t reply_cur;  /* device reply cursor (M5v, posted into +0x0c) */
     uint32_t time_pfn;   /* op3a device-time page (M6u) */
     uint64_t time_last;  /* last ns written to the time page */
-    uint32_t stamp_pfn;  /* op38 sync/stamp page (M7ah) */
-    uint32_t stamp_val;  /* last stamp value written */
+    uint32_t stamp_pfn[8]; /* op38 sync/stamp pages per channel (M7ca) */
+    int n_stamps;          /* count of registered stamp pages */
     bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
     uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
@@ -249,14 +249,12 @@ static void fifoB_reply(AppleGfxTrace *s)
         if (op == 0x38 && hdr[1] >= 28 && ((uint32_t *)msg)[3] == 1) {
             uint32_t cand = ((uint32_t *)msg)[6];
             /*
-             * M7ah: page này = STAMP page (guest log: 'timeout waiting for
-             * Apple Paravirt Accelerator stamp 7 (gpu_stamp=1)'). Lưu pfn;
-             * tăng stamp dword @+0x140 mỗi doorbell để mô phỏng GPU hoàn
-             * thành work (checkGPUProgress sẽ thấy progress, ngừng signal
-             * hardware error).
+             * M7ca: op38 {chan, 0, 4, pfn} = per-channel STAMP page
+             * registration (arg0 = channel id). Lưu theo thứ tự nhận.
              */
-            s->stamp_pfn = cand;
-            s->stamp_val = 0;
+            if (s->n_stamps < 8) {
+                s->stamp_pfn[s->n_stamps++] = cand;
+            }
         }
         if (op == 0x3a && hdr[1] >= 24) {
             uint32_t cand = ((uint32_t *)msg)[5];   /* payload[2] = pfn (M6v) */
@@ -403,21 +401,23 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     if (addr == 0x1008) {
         s->last_db = val;
         /*
-         * M7bu: bump TẤT CẢ 32 stamp dwords @+0x00..0x7c (+8 mỗi doorbell)
-         * — blanket: stamps[4]/[7] cùng nhảy.
+         * M7ca: blanket bump TẤT CẢ stamp pages đã đăng ký (32 dwords mỗi
+         * page, +8) — các stamps của mọi channel cùng nhảy.
          */
-        if (s->stamp_pfn) {
+        for (int p = 0; p < s->n_stamps; p++) {
             uint32_t stamps[32];
-            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)s->stamp_pfn << 12,
+            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)s->stamp_pfn[p] << 12,
                              stamps, sizeof(stamps)) == MEMTX_OK) {
                 for (int k = 0; k < 32; k++) {
                     stamps[k] += 8;
                 }
-                pci_dma_write(PCI_DEVICE(s), (uint64_t)s->stamp_pfn << 12,
+                pci_dma_write(PCI_DEVICE(s), (uint64_t)s->stamp_pfn[p] << 12,
                               stamps, sizeof(stamps));
-                fprintf(s->log, "reply: blanket stamp bump 32 dwords +8\n");
-                fflush(s->log);
             }
+        }
+        if (s->n_stamps) {
+            fprintf(s->log, "reply: blanket bump %d stamp pages\n", s->n_stamps);
+            fflush(s->log);
         }
         dump_guest_pages(s);
         if (s->reply) {
