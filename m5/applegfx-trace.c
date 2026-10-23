@@ -52,6 +52,8 @@ struct AppleGfxTrace {
     uint32_t reply_cur;  /* device reply cursor (M5v, posted into +0x0c) */
     uint32_t time_pfn;   /* op3a device-time page (M6u) */
     uint64_t time_last;  /* last ns written to the time page */
+    uint32_t stamp_pfn;  /* op38 sync/stamp page (M7ah) */
+    uint32_t stamp_val;  /* last stamp value written */
     bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
     uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
@@ -246,16 +248,15 @@ static void fifoB_reply(AppleGfxTrace *s)
          */
         if (op == 0x38 && hdr[1] >= 28 && ((uint32_t *)msg)[3] == 1) {
             uint32_t cand = ((uint32_t *)msg)[6];
-            uint32_t page[1024];
-            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)cand << 12, page,
-                             sizeof(page)) == MEMTX_OK) {
-                fprintf(s->log, "reply: op38 pfn 0x%x dump:", cand);
-                for (int i = 0; i < 16; i++) {
-                    if (page[i]) fprintf(s->log, " +%x=%08x", i * 4, page[i]);
-                }
-                fprintf(s->log, "\n");
-                fflush(s->log);
-            }
+            /*
+             * M7ah: page này = STAMP page (guest log: 'timeout waiting for
+             * Apple Paravirt Accelerator stamp 7 (gpu_stamp=1)'). Lưu pfn;
+             * tăng stamp dword @+0x140 mỗi doorbell để mô phỏng GPU hoàn
+             * thành work (checkGPUProgress sẽ thấy progress, ngừng signal
+             * hardware error).
+             */
+            s->stamp_pfn = cand;
+            s->stamp_val = 0;
         }
         if (op == 0x3a && hdr[1] >= 24) {
             uint32_t cand = ((uint32_t *)msg)[5];   /* payload[2] = pfn (M6v) */
@@ -402,6 +403,23 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     }
     if (addr == 0x1008) {
         s->last_db = val;
+        /*
+         * M7ah: sau mỗi doorbell (driver submit work), tăng stamp dword
+         * @stamp_page+0x140 để EventMachine thấy progress (gpu_stamp tăng).
+         */
+        if (s->stamp_pfn) {
+            uint32_t stamp;
+            if (pci_dma_read(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x140,
+                             &stamp, 4) == MEMTX_OK) {
+                s->stamp_val = stamp + 1;
+                uint32_t nv = s->stamp_val;
+                pci_dma_write(PCI_DEVICE(s), ((uint64_t)s->stamp_pfn << 12) + 0x140,
+                              &nv, 4);
+                fprintf(s->log, "reply: stamp bump @+0x140 %u -> %u\n",
+                        stamp, nv);
+                fflush(s->log);
+            }
+        }
         dump_guest_pages(s);
         if (s->reply) {
             fifoB_reply(s);
