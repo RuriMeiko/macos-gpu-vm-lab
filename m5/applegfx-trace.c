@@ -54,7 +54,6 @@ struct AppleGfxTrace {
     uint64_t time_last;  /* last ns written to the time page */
     uint32_t stamp_pfn[8]; /* op38 sync/stamp pages per channel (M7ca) */
     int n_stamps;          /* count of registered stamp pages */
-    int n_areas;           /* op33 1MB areas allocated (M7e2) */
     bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
     uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
@@ -314,19 +313,12 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint8_t segbuf[0x400];
         memset(segbuf, 0, sizeof(segbuf));
         /*
-         * M7e2: op33 = device-allocates-1MB request; reply dword0 = PA>>12
-         * của 1MB do device chọn. Stub cấp vùng riêng trong RAM guest thấp
-         * (0x25000000) cho mỗi op33 (n=0 stamps, n=1..2 khác). op30/op38:
-         * giữ dword0 = 0x40 (M7bq cookie đã mở Accelerator).
+         * M7bq: reply dword0 = 0x40 — kiểm chứng 'gpu_stamp = reply dword0'
+         * (gpu_stamp=1 với reply 1, =0 với reply 0; waitForStamp chờ giá trị
+         * 0x11=17+ → reply dword0 lớn có thể thỏa luôn).
          */
-        if (op == 0x33) {
-            uint32_t areabase = 0x25000000u + 0x100000u * (s->n_areas++);
-            ((uint32_t *)segbuf)[0] = areabase >> 12;
-            fprintf(s->log, "reply: op33 area n=%u -> phys 0x%08x\n",
-                    s->n_areas - 1, areabase);
-        } else {
-            ((uint32_t *)segbuf)[0] = 0x40;
-        }
+        ((uint32_t *)segbuf)[0] = 0x40;
+        memset(((uint32_t *)segbuf) + 1, 0, sizeof(segbuf) - 4);
         bool ok = ring_write(s, fifoA_base, ring_size, prod, segbuf, seglen);
         if (!ok) {
             fprintf(s->log, "reply: DMAFAIL writing fifoA segment (seq %u)\n", seq);
