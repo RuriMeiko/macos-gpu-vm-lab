@@ -404,30 +404,28 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
          * M7ca: blanket bump TẤT CẢ stamp pages đã đăng ký (32 dwords mỗi
          * page, +8) — các stamps của mọi channel cùng nhảy.
          */
-        for (int p = 0; p < s->n_stamps; p++) {
-            uint32_t stamps[32];
-            if (pci_dma_read(PCI_DEVICE(s), (uint64_t)s->stamp_pfn[p] << 12,
-                             stamps, sizeof(stamps)) == MEMTX_OK) {
-                for (int k = 0; k < 32; k++) {
-                    stamps[k] += 8;
+        /*
+         * M7dp (advisor route): stamp base = 1MB shared area (op 0x33) —
+         * PA = fifoB PFN (reg +0x101c) aligned 1MB xuống. stamp[idx] =
+         * base + idx*4. Bump 32 dwords đầu mỗi doorbell.
+         */
+        {
+            uint32_t fifob_pfn = 0;
+            memcpy(&fifob_pfn, s->mem + REG_BASE + 0x101c, 4);
+            if (fifob_pfn) {
+                uint64_t sbase = ((uint64_t)fifob_pfn << 12) & ~0xfffffull;
+                uint32_t stamps[32];
+                if (pci_dma_read(PCI_DEVICE(s), sbase, stamps,
+                                 sizeof(stamps)) == MEMTX_OK) {
+                    for (int k = 0; k < 32; k++) {
+                        stamps[k] += 4;
+                    }
+                    pci_dma_write(PCI_DEVICE(s), sbase, stamps, sizeof(stamps));
+                    fprintf(s->log, "reply: 1MB-base stamp bump @0x%llx\n",
+                            (unsigned long long)sbase);
+                    fflush(s->log);
                 }
-                pci_dma_write(PCI_DEVICE(s), (uint64_t)s->stamp_pfn[p] << 12,
-                              stamps, sizeof(stamps));
             }
-        }
-        if (s->n_stamps) {
-            fprintf(s->log, "reply: blanket bump %d stamp pages\n", s->n_stamps);
-            /* M7cf: dump page of channel-2 stamp (stamps[4] driver waits on) */
-            for (int p = 0; p < s->n_stamps; p++) {
-                uint32_t hdr8[8];
-                if (pci_dma_read(PCI_DEVICE(s), (uint64_t)s->stamp_pfn[p] << 12,
-                                 hdr8, sizeof(hdr8)) == MEMTX_OK) {
-                    fprintf(s->log, "  page%d 0x%x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-                            p, s->stamp_pfn[p], hdr8[0], hdr8[1], hdr8[2], hdr8[3],
-                            hdr8[4], hdr8[5], hdr8[6], hdr8[7]);
-                }
-            }
-            fflush(s->log);
         }
         dump_guest_pages(s);
         if (s->reply) {
