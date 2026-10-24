@@ -246,7 +246,7 @@ static void fifoB_reply(AppleGfxTrace *s)
          * Candidate segdesc PA: op-0x38 payload[3] = PFN (0x202f55 / 0x1f0996
          * / ... varies per boot). Dump it + reply into it.
          */
-        if (op == 0x38 && hdr[1] >= 28 && ((uint32_t *)msg)[3] == 1) {
+        if (op == 0x38 && hdr[1] >= 28) {
             uint32_t cand = ((uint32_t *)msg)[6];
             /*
              * M7ca: op38 {chan, 0, 4, pfn} = per-channel STAMP page
