@@ -314,17 +314,20 @@ static void fifoB_reply(AppleGfxTrace *s)
         uint8_t segbuf[0x400];
         memset(segbuf, 0, sizeof(segbuf));
         /*
-         * M7ge: op33 payload[1] (wire dword[4]) = PA>>12 do driver gửi
-         * (builder 0x1489baba: [r13+4] = PA>>12). Lưu PA per-area; bump
-         * stamps 32 dwords đầu tại PA ĐÓ (không chọn PA riêng nữa).
+         * M7g3 (retry M7e2, panics là transient M7f6): op33 = device cấp
+         * 1MB; reply dword0 = PFN vùng device chọn. Stub cấp AREABASE
+         * 0x30000000 + n*1MB. n=0 (seq 2) = stamps area — bump stamps[idx]
+         * tại base + idx*4 mỗi doorbell.
          */
         if (op == 0x33) {
-            uint32_t areapfn = ((uint32_t *)msg)[4];
-            s->stamp_pfn[s->n_areas % 8] = areapfn;
+            uint32_t areabase = 0x30000000u + 0x100000u * s->n_areas;
+            s->stamp_pfn[s->n_areas % 8] = areabase >> 12;
             s->n_areas++;
-            fprintf(s->log, "reply: op33 area n=%d pfn=0x%x (PA 0x%llx)\n",
-                    s->n_areas - 1, areapfn,
-                    (unsigned long long)areapfn << 12);
+            ((uint32_t *)segbuf)[0] = areabase >> 12;
+            fprintf(s->log, "reply: op33 area n=%d -> phys 0x%08x\n",
+                    s->n_areas - 1, areabase);
+        } else {
+            ((uint32_t *)segbuf)[0] = 0x40;
         }
         memset(((uint32_t *)segbuf) + 1, 0, sizeof(segbuf) - 4);
         bool ok = ring_write(s, fifoA_base, ring_size, prod, segbuf, seglen);
@@ -413,11 +416,11 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
          * page, +8) — các stamps của mọi channel cùng nhảy.
          */
         /*
-         * M7ge: bump stamps tại PA do driver gửi (msg[4]<<12), không phải
-         * vùng tự chọn 0x30000000 nữa.
+         * M7g4: stamp base = AREABASE (op33 device-chosen 1MB, M7g3) —
+         * bump stamps[idx] = base + idx*4 (32 dwords đầu) mỗi doorbell.
          */
-        if (s->n_areas > 0 && s->stamp_pfn[0]) {
-            uint64_t sbase = (uint64_t)s->stamp_pfn[0] << 12;
+        if (s->n_areas > 0) {
+            uint64_t sbase = 0x30000000ull;
             uint32_t stamps[32];
             if (pci_dma_read(PCI_DEVICE(s), sbase, stamps,
                              sizeof(stamps)) == MEMTX_OK) {
@@ -425,7 +428,7 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
                     stamps[k] += 4;
                 }
                 pci_dma_write(PCI_DEVICE(s), sbase, stamps, sizeof(stamps));
-                fprintf(s->log, "reply: op33-area stamp bump @0x%llx\n",
+                fprintf(s->log, "reply: area stamp bump @0x%llx\n",
                         (unsigned long long)sbase);
                 fflush(s->log);
             }
