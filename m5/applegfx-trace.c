@@ -411,7 +411,7 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
          */
         {
             uint32_t fifob_pfn = 0;
-            memcpy(&fifob_pfn, s->mem + REG_BASE + 0x101c, 4);
+            memcpy(&fifob_pfn, s->mem + REG_FIFOB, 4);
             if (fifob_pfn) {
                 uint64_t sbase = ((uint64_t)fifob_pfn << 12) & ~0xfffffull;
                 uint32_t stamps[32];
