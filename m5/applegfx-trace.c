@@ -489,6 +489,11 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         if (s->reply) {
             fifoB_reply(s);
         }
+        /* M7jjb: re-arm stamp tick từ doorbell context (main loop) */
+        if (s->stamp_timer) {
+            timer_mod(s->stamp_timer,
+                      qemu_clock_get_ms(QEMU_CLOCK_HOST) + 1000);
+        }
     }
 }
 
@@ -532,7 +537,7 @@ static void gfx_realize(PCIDevice *pdev, Error **errp)
      * entries) định kỳ, không phụ thuộc doorbell (submit path không tạo
      * doorbell sau handshake).
      */
-    s->stamp_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL,
+    s->stamp_timer = timer_new_ms(QEMU_CLOCK_HOST,
                                   (QEMUTimerCB *)gfx_stamp_tick, s);
     timer_mod(s->stamp_timer,
               qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000);
@@ -545,9 +550,14 @@ static void gfx_realize(PCIDevice *pdev, Error **errp)
  * M7jj tick: mỗi 1s bump stamp dword trên segdesc page của từng channel
  * (root block entry, fifoB+0x400 stride 0x14). Bump @+0x40 (idx4) +0x10.
  */
+static int tick_count;
 static void gfx_stamp_tick(AppleGfxTrace *s)
 {
     uint32_t fb = reg_r32(s, REG_FIFOB);
+    if ((++tick_count % 10) == 1) {
+        fprintf(s->log, "reply: tick #%d fb=0x%x\n", tick_count, fb);
+        fflush(s->log);
+    }
     if (fb > 0x100) {
         for (uint32_t ch = 1; ch <= 5; ch++) {
             uint32_t ent[2];
