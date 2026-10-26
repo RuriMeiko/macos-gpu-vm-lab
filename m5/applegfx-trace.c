@@ -559,6 +559,27 @@ static void gfx_stamp_tick(AppleGfxTrace *s)
         fflush(s->log);
     }
     /*
+     * M7ju: bump 32 dwords đầu của op33 AREA (0x30000000) mỗi tick —
+     * waitForStamp stamp ptr = [em+0x20](area base) + [vtbl+0x138](idx*4)
+     * → stamp dword nằm TRONG AREA, không phải op38 page. Doorbell không
+     * xảy ra sau handshake → phải bump theo timer.
+     */
+    if (s->n_areas > 0) {
+        uint64_t sbase = 0x30000000ull;
+        uint32_t stamps[32];
+        if (pci_dma_read(PCI_DEVICE(s), sbase, stamps, sizeof(stamps))
+            == MEMTX_OK) {
+            for (int k = 0; k < 32; k++) {
+                stamps[k] += 4;
+            }
+            pci_dma_write(PCI_DEVICE(s), sbase, stamps, sizeof(stamps));
+            if ((tick_count % 10) == 1) {
+                fprintf(s->log, "reply: tick area stamp bump @0x%llx\n",
+                        (unsigned long long)sbase);
+            }
+        }
+    }
+    /*
      * M7jl: bump stamp[4] trên op38 stamp pages (s->stamp_pfn[] — cùng
      * pfn 0x20129b-style {val, cnt, ..., idx=4}): stamp[i] @pfn<<12 + 4*i;
      * waitForStamp đọc stamp ptr = stamp base + 4*idx. Bump @+0x10 (idx4).
