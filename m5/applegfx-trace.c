@@ -342,7 +342,7 @@ static void fifoB_reply(AppleGfxTrace *s)
          */
         if (op == 0x33) {
             uint32_t areabase = 0x30000000u + 0x100000u * s->n_areas;
-            s->stamp_pfn[s->n_areas % 8] = areabase >> 12;
+            /* M7jm: KHÔNG ghi vào stamp_pfn[] — tick chỉ bump op38 pages */
             s->n_areas++;
             ((uint32_t *)segbuf)[0] = areabase >> 12;
             fprintf(s->log, "reply: op33 area n=%d -> phys 0x%08x\n",
