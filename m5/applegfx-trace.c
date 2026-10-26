@@ -453,6 +453,37 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
                 fflush(s->log);
             }
         }
+        /*
+         * M7je (doorbell): bump stamp dword TRÊN SEGDESC PAGE của MỖI
+         * channel (root block entry, stride 0x14 @fifoB+0x400): entry =
+         * {chan, pfn}; bump dword @pfn<<12 + 0x40 (idx4) và +0x10.
+         */
+        {
+            uint32_t fb = reg_r32(s, REG_FIFOB);
+            if (fb > 0x100) {
+                for (uint32_t ch = 1; ch <= 5; ch++) {
+                    uint32_t ent[2];
+                    uint64_t epa = ((uint64_t)fb << 12) + 0x400ull +
+                                   (uint64_t)(ch - 1) * 0x14ull;
+                    if (pci_dma_read(PCI_DEVICE(s), epa, ent, 8) == MEMTX_OK &&
+                        ent[0] == ch && ent[1] > 0x1000) {
+                        for (int off_i = 0; off_i < 2; off_i++) {
+                            uint64_t spa = ((uint64_t)ent[1] << 12) +
+                                           (off_i == 0 ? 0x40ull : 0x10ull);
+                            uint32_t sv = 0;
+                            if (pci_dma_read(PCI_DEVICE(s), spa, &sv, 4)
+                                == MEMTX_OK) {
+                                sv += 4;
+                                pci_dma_write(PCI_DEVICE(s), spa, &sv, 4);
+                            }
+                        }
+                        fprintf(s->log, "reply: doorbell segdesc bump "
+                                "ch=%u pfn=0x%x\n", ch, ent[1]);
+                    }
+                }
+                fflush(s->log);
+            }
+        }
         dump_guest_pages(s);
         if (s->reply) {
             fifoB_reply(s);
