@@ -347,6 +347,15 @@ static void fifoB_reply(AppleGfxTrace *s)
             ((uint32_t *)segbuf)[0] = areabase >> 12;
             fprintf(s->log, "reply: op33 area n=%d -> phys 0x%08x\n",
                     s->n_areas - 1, areabase);
+        } else if (op == 0x30) {
+            /* M7jx: register N — reply N dwords (mỗi dword = 0x40) */
+            uint32_t nreg = ((uint32_t *)msg)[3];
+            if (nreg < 1 || nreg > 64) nreg = 1;
+            for (uint32_t k = 0; k < nreg; k++) {
+                ((uint32_t *)segbuf)[k] = 0x40;
+            }
+            fprintf(s->log, "reply: op30 register n=%u -> %u dwords\n",
+                    nreg, nreg);
         } else {
             ((uint32_t *)segbuf)[0] = 0x40;
         }
