@@ -55,6 +55,7 @@ struct AppleGfxTrace {
     uint32_t stamp_pfn[8]; /* op38 sync/stamp pages per channel (M7ca) */
     int n_stamps;          /* count of registered stamp pages */
     int n_areas;           /* op33 1MB areas allocated (M7g3) */
+    QEMUTimer *stamp_timer; /* M7jj: 1s periodic stamp bump timer */
     bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
     uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
@@ -499,6 +500,11 @@ static const MemoryRegionOps gfx_mmio_ops = {
     .impl  = { .min_access_size = 1, .max_access_size = 8 },
 };
 
+static void gfx_exit(PCIDevice *pdev);
+
+/* M7jj: 1s periodic stamp bump tick (fwd decl cho gfx_realize) */
+static void gfx_stamp_tick(AppleGfxTrace *s);
+
 static void gfx_realize(PCIDevice *pdev, Error **errp)
 {
     AppleGfxTrace *s = APPLEGFX_TRACE(pdev);
@@ -521,9 +527,51 @@ static void gfx_realize(PCIDevice *pdev, Error **errp)
     memory_region_init_io(&s->mmio, OBJECT(s), &gfx_mmio_ops, s,
                           "applegfx-trace.mmio", s->bar0_size);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->mmio);
+    /*
+     * M7jj: timer 1s — bump stamp dwords trên segdesc pages (root block
+     * entries) định kỳ, không phụ thuộc doorbell (submit path không tạo
+     * doorbell sau handshake).
+     */
+    s->stamp_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL,
+                                  (QEMUTimerCB *)gfx_stamp_tick, s);
+    timer_mod(s->stamp_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000);
     fprintf(s->log, "# realize bar0=0x%x readfill=0x%02x\n", s->bar0_size,
             s->readfill & 0xff);
     fflush(s->log);
+}
+
+/*
+ * M7jj tick: mỗi 1s bump stamp dword trên segdesc page của từng channel
+ * (root block entry, fifoB+0x400 stride 0x14). Bump @+0x40 (idx4) +0x10.
+ */
+static void gfx_stamp_tick(AppleGfxTrace *s)
+{
+    uint32_t fb = reg_r32(s, REG_FIFOB);
+    if (fb > 0x100) {
+        for (uint32_t ch = 1; ch <= 5; ch++) {
+            uint32_t ent[2];
+            uint64_t epa = ((uint64_t)fb << 12) + 0x400ull +
+                           (uint64_t)(ch - 1) * 0x14ull;
+            if (pci_dma_read(PCI_DEVICE(s), epa, ent, 8) == MEMTX_OK &&
+                ent[0] == ch && ent[1] > 0x1000) {
+                for (int off_i = 0; off_i < 2; off_i++) {
+                    uint64_t spa = ((uint64_t)ent[1] << 12) +
+                                   (off_i == 0 ? 0x40ull : 0x10ull);
+                    uint32_t sv = 0;
+                    if (pci_dma_read(PCI_DEVICE(s), spa, &sv, 4) == MEMTX_OK) {
+                        sv += 4;
+                        pci_dma_write(PCI_DEVICE(s), spa, &sv, 4);
+                    }
+                }
+                fprintf(s->log, "reply: tick segdesc bump ch=%u pfn=0x%x\n",
+                        ch, ent[1]);
+            }
+        }
+        fflush(s->log);
+    }
+    timer_mod(s->stamp_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000);
 }
 
 static void gfx_exit(PCIDevice *pdev)
