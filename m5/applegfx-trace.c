@@ -55,7 +55,6 @@ struct AppleGfxTrace {
     uint32_t stamp_pfn[8]; /* op38 sync/stamp pages per channel (M7ca) */
     int n_stamps;          /* count of registered stamp pages */
     int n_areas;           /* op33 1MB areas allocated (M7g3) */
-    uint64_t stamp_phys;   /* M7hm: stamp base PA (driver-given) */
     bool reply;          /* experiment M5d: answer each command in fifoB + MSI */
     uint32_t repl_seq;   /* seq number of the last reply we wrote */
 };
@@ -321,16 +320,12 @@ static void fifoB_reply(AppleGfxTrace *s)
          * tại base + idx*4 mỗi doorbell.
          */
         if (op == 0x33) {
-            /*
-             * M7hq (retry M7e2 chuẩn trên guest khỏe): reply dword0 = PFN
-             * vùng 1MB device cấp (0x30000000). Driver sẽ map VA↔PFN đó;
-             * bump 8 dwords @+0x40 mỗi doorbell (M7hm minimal).
-             */
-            s->stamp_phys = 0x30000000ull + 0x40ull;
-            fprintf(s->log, "reply: op33 area n=%d -> phys 0x30000000\n",
-                    s->n_areas);
+            uint32_t areabase = 0x30000000u + 0x100000u * s->n_areas;
+            s->stamp_pfn[s->n_areas % 8] = areabase >> 12;
             s->n_areas++;
-            ((uint32_t *)segbuf)[0] = 0x30000;
+            ((uint32_t *)segbuf)[0] = areabase >> 12;
+            fprintf(s->log, "reply: op33 area n=%d -> phys 0x%08x\n",
+                    s->n_areas - 1, areabase);
         } else {
             ((uint32_t *)segbuf)[0] = 0x40;
         }
@@ -421,22 +416,19 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
          * page, +8) — các stamps của mọi channel cùng nhảy.
          */
         /*
-         * M7hm: M7ge (bump @0x1000) đã phá P2 — NHƯNG có thể do bump 32
-         * dwords @0x1000..0x1080 ghi đè vùng boot. Thử lại CHÍNH XÁC:
-         * bump CHỈ 8 dwords @driver-PA + 0x40 (idx 4-7 stamps 16B stride)
-         * VÀ +0x10 (idx 4 straight) — tối thiểu can thiệp. Lưu pfn từ
-         * msg[4] (op33) và msg[6] (op38 pfn) — dùng op38 pfn page nếu có.
+         * M7g4: stamp base = AREABASE (op33 device-chosen 1MB, M7g3) —
+         * bump stamps[idx] = base + idx*4 (32 dwords đầu) mỗi doorbell.
          */
-        if (s->stamp_phys) {
-            uint32_t stamps[8];
-            uint64_t sbase = s->stamp_phys;
+        if (s->n_areas > 0) {
+            uint64_t sbase = 0x30000000ull;
+            uint32_t stamps[32];
             if (pci_dma_read(PCI_DEVICE(s), sbase, stamps,
                              sizeof(stamps)) == MEMTX_OK) {
-                for (int k = 0; k < 8; k++) {
+                for (int k = 0; k < 32; k++) {
                     stamps[k] += 4;
                 }
                 pci_dma_write(PCI_DEVICE(s), sbase, stamps, sizeof(stamps));
-                fprintf(s->log, "reply: stamp bump @0x%llx\n",
+                fprintf(s->log, "reply: area stamp bump @0x%llx\n",
                         (unsigned long long)sbase);
                 fflush(s->log);
             }
