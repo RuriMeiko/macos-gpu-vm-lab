@@ -558,6 +558,23 @@ static void gfx_stamp_tick(AppleGfxTrace *s)
         fprintf(s->log, "reply: tick #%d fb=0x%x\n", tick_count, fb);
         fflush(s->log);
     }
+    /*
+     * M7jl: bump stamp[4] trên op38 stamp pages (s->stamp_pfn[] — cùng
+     * pfn 0x20129b-style {val, cnt, ..., idx=4}): stamp[i] @pfn<<12 + 4*i;
+     * waitForStamp đọc stamp ptr = stamp base + 4*idx. Bump @+0x10 (idx4).
+     */
+    for (int i = 0; i < s->n_stamps; i++) {
+        if (s->stamp_pfn[i] > 0x100) {
+            uint64_t spa = ((uint64_t)s->stamp_pfn[i] << 12) + 0x10ull;
+            uint32_t sv = 0;
+            if (pci_dma_read(PCI_DEVICE(s), spa, &sv, 4) == MEMTX_OK) {
+                sv += 4;
+                pci_dma_write(PCI_DEVICE(s), spa, &sv, 4);
+                fprintf(s->log, "reply: tick stamp bump pfn=0x%x +0x10 -> %u\n",
+                        s->stamp_pfn[i], sv);
+            }
+        }
+    }
     if (fb > 0x100) {
         for (uint32_t ch = 1; ch <= 5; ch++) {
             uint32_t ent[2];
