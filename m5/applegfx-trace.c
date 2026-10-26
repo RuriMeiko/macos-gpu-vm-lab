@@ -570,7 +570,7 @@ static void gfx_stamp_tick(AppleGfxTrace *s)
         if (pci_dma_read(PCI_DEVICE(s), sbase, stamps, sizeof(stamps))
             == MEMTX_OK) {
             for (int k = 0; k < 32; k++) {
-                stamps[k] += 4;
+                stamps[k] += 1;
             }
             pci_dma_write(PCI_DEVICE(s), sbase, stamps, sizeof(stamps));
             if ((tick_count % 10) == 1) {
