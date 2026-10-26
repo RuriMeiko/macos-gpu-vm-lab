@@ -568,6 +568,23 @@ static void gfx_stamp_tick(AppleGfxTrace *s)
         fflush(s->log);
     }
     /*
+     * M7kx: driver map hỏng trả PA 0x1000 (M7kv/kw) → nó poll stamps
+     * tại PA 0x1000+idx*4. Bump dword @0x1010 (idx4) mỗi 2 tick (2s)
+     * — chỉ sau khi n_areas>0 (post-handshake). NHỎ, có revert.
+     */
+    if (s->n_areas > 0 && (tick_count % 2) == 0) {
+        uint64_t spa = 0x1010ull;
+        uint32_t sv = 0;
+        if (pci_dma_read(PCI_DEVICE(s), spa, &sv, 4) == MEMTX_OK) {
+            sv += 1;
+            pci_dma_write(PCI_DEVICE(s), spa, &sv, 4);
+            if ((tick_count % 20) == 0) {
+                fprintf(s->log, "reply: m7kx bump @0x1010 -> %u\n", sv);
+                fflush(s->log);
+            }
+        }
+    }
+    /*
      * M7ju: bump 32 dwords đầu của op33 AREA (0x30000000) mỗi tick —
      * waitForStamp stamp ptr = [em+0x20](area base) + [vtbl+0x138](idx*4)
      * → stamp dword nằm TRONG AREA, không phải op38 page. Doorbell không
