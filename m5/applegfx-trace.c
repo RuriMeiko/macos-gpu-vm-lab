@@ -250,9 +250,29 @@ static void fifoB_reply(AppleGfxTrace *s)
         if (op == 0x38 && hdr[1] >= 28) {
             uint32_t cand = ((uint32_t *)msg)[6];
             /*
-             * M7ca: op38 {chan, 0, 4, pfn} = per-channel STAMP page
-             * registration (arg0 = channel id). Lưu theo thứ tự nhận.
+             * M7jd (mới): bump STAMP dword trên SEGDESC page của channel
+             * (root block entry pfn) — không phải op38 pfn. Đọc root
+             * block entry: fifoB buffer + 0x400 + (chan-1)*0x14 + 4.
+             * chan = msg[3]. Bump dword @segdesc_pfn<<12 + 0x40 (idx 4).
              */
+            uint32_t chan = ((uint32_t *)msg)[3];
+            uint32_t fifob_pfn2 = reg_r32(s, REG_FIFOB);
+            uint32_t ent[2];
+            uint64_t entpa = ((uint64_t)fifob_pfn2 << 12) + 0x400ull +
+                             (uint64_t)((chan - 1) & 7) * 0x14ull;
+            if (chan >= 1 && chan <= 5 &&
+                pci_dma_read(PCI_DEVICE(s), entpa, ent, 8) == MEMTX_OK &&
+                ent[0] == chan && ent[1] > 0x1000) {
+                uint64_t spa = ((uint64_t)ent[1] << 12) + 0x40ull;
+                uint32_t sv = 0;
+                pci_dma_read(PCI_DEVICE(s), spa, &sv, 4);
+                sv += 4;
+                pci_dma_write(PCI_DEVICE(s), spa, &sv, 4);
+                fprintf(s->log, "reply: segdesc stamp bump chan=%u "
+                        "pfn=0x%x @0x%llx -> %u\n", chan, ent[1],
+                        (unsigned long long)spa, sv);
+                fflush(s->log);
+            }
             if (s->n_stamps < 8) {
                 s->stamp_pfn[s->n_stamps++] = cand;
             }
