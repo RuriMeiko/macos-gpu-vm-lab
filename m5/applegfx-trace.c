@@ -491,7 +491,7 @@ static void gfx_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         }
         /* M7jjb: re-arm stamp tick từ doorbell context (main loop) */
         if (s->stamp_timer) {
-            timer_mod(s->stamp_timer,
+            timer_mod_ms(s->stamp_timer,
                       qemu_clock_get_ms(QEMU_CLOCK_HOST) + 1000);
         }
     }
@@ -539,8 +539,8 @@ static void gfx_realize(PCIDevice *pdev, Error **errp)
      */
     s->stamp_timer = timer_new_ms(QEMU_CLOCK_HOST,
                                   (QEMUTimerCB *)gfx_stamp_tick, s);
-    timer_mod(s->stamp_timer,
-              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000);
+    timer_mod_ms(s->stamp_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_HOST) + 1000);
     fprintf(s->log, "# realize bar0=0x%x readfill=0x%02x\n", s->bar0_size,
             s->readfill & 0xff);
     fflush(s->log);
@@ -580,8 +580,8 @@ static void gfx_stamp_tick(AppleGfxTrace *s)
         }
         fflush(s->log);
     }
-    timer_mod(s->stamp_timer,
-              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000);
+    timer_mod_ms(s->stamp_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_HOST) + 1000);
 }
 
 static void gfx_exit(PCIDevice *pdev)
