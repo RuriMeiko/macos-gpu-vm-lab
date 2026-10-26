@@ -568,18 +568,18 @@ static void gfx_stamp_tick(AppleGfxTrace *s)
         fflush(s->log);
     }
     /*
-     * M7kx: driver map hỏng trả PA 0x1000 (M7kv/kw) → nó poll stamps
-     * tại PA 0x1000+idx*4. Bump dword @0x1010 (idx4) mỗi 2 tick (2s)
-     * — chỉ sau khi n_areas>0 (post-handshake). NHỎ, có revert.
+     * M7mf (advisor): op33 area n=1 @0x30100000 — bump dword +0x10
+     * (idx 4) mỗi 2 tick — area n=0 là TS array driver-tự-ghi, n=1
+     * chưa có ai đụng. Thử xem gpu_stamp đổi không.
      */
-    if (s->n_areas > 0 && (tick_count % 2) == 0) {
-        uint64_t spa = 0x1010ull;
+    if (s->n_areas > 1 && (tick_count % 2) == 0) {
+        uint64_t spa = 0x30100010ull;
         uint32_t sv = 0;
         if (pci_dma_read(PCI_DEVICE(s), spa, &sv, 4) == MEMTX_OK) {
             sv += 1;
             pci_dma_write(PCI_DEVICE(s), spa, &sv, 4);
             if ((tick_count % 20) == 0) {
-                fprintf(s->log, "reply: m7kx bump @0x1010 -> %u\n", sv);
+                fprintf(s->log, "reply: m7mf bump area1 +0x10 -> %u\n", sv);
                 fflush(s->log);
             }
         }
